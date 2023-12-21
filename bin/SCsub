@@ -1,0 +1,9 @@
+#!/usr/bin/env python
+
+Import('env')
+
+
+ctfiles=['main.c'];
+env["LINKCOM"] = '$LINK -o $TARGET $LINKFLAGS $__RPATH $SOURCES $_LIBDIRFLAGS -Wl,--start-group $_LIBFLAGS -Wl,--end-group'
+env.Append(LIBS=env.libs)
+env.Program('vk_renderer', ctfiles);
