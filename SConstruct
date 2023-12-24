@@ -5,7 +5,7 @@ EnsurePythonVersion(3, 6)
 
 env = Environment(CPPPATH=['usr/include', '/opt/local/include','#.'])
 env.Append(CCFLAGS=["-g3", "-Werror", "-Wextra", "-Wall", "-Wshadow", "-Wfloat-equal", "-Wpointer-arith", "-Wcast-align", "-Wstrict-prototypes", "-Wstrict-overflow=5", "-Wwrite-strings", "-Waggregate-return", "-Wcast-qual", "-Wswitch-default", "-Wswitch-enum", "-Wconversion", "-Wunreachable-code", "-Wformat=2", "-D_REENTRANT"])
-env.Append(LIBS=['SDL2main','SDL2']);
+env.Append(LIBS=['SDL2main','SDL2', 'vulkan']);
 
 def add_sources(self, sources, filetype, lib_env = None, shared = False):
 	import glob;
@@ -23,11 +23,31 @@ def add_sources(self, sources, filetype, lib_env = None, shared = False):
 		for f in filetype:
 			sources.append(self.Object(f))
 
+def build_shaders(self, sources, output):
+	import glob;
+	import string;
+	from pathlib import Path;
+	shaders=[]
+	
+	shaders += glob.glob(sources + "*.vert")
+	shaders += glob.glob(sources + "*.frag")
+	
+	for shader in shaders:
+		file_name = str(Path(shader).stem)
+		folder = str(Path(shader).parent)
+		self.Glslc(output + folder + "/" + file_name + ".spv", shader)
+
 env.__class__.add_sources=add_sources
+env.__class__.build_shaders=build_shaders
 
 Export("env")
 
 env.libs=[]
+
+glslc_builder = Builder(action='glslc $SOURCE -o $TARGET')
+env.Append(BUILDERS={'Glslc' : glslc_builder})
+
+env.build_shaders("shaders/", "bin/")
 
 SConscript("src/SCsub")
 SConscript('bin/SCsub');
