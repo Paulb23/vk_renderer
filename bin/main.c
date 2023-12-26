@@ -43,6 +43,72 @@ char *read_file(const char *p_path, size_t *r_file_size) {
     return buffer;
 }
 
+void create_vkbuffer(VkDevice p_device, VkPhysicalDevice p_physical_device, VkDeviceSize p_size, VkBufferUsageFlags p_usage, VkMemoryPropertyFlags p_properties, VkBuffer *p_buffer, VkDeviceMemory *p_buffer_memory) {
+    VkBufferCreateInfo buffer_crreate_info = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = p_size,
+        .usage = p_usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+
+    VkResult error = vkCreateBuffer(p_device, &buffer_crreate_info, NULL, p_buffer);
+    if (error != VK_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to allocate vertex buffer!", NULL);
+        return;
+    }
+
+    VkMemoryRequirements vk_memory_requrements;
+    vkGetBufferMemoryRequirements(p_device, *p_buffer, &vk_memory_requrements);
+
+    VkPhysicalDeviceMemoryProperties vk_memory_properties;
+    vkGetPhysicalDeviceMemoryProperties(p_physical_device, &vk_memory_properties);
+
+    uint32_t memory_type_idx = 0;
+    bool found = false;
+    for (uint32_t i = 0; i < vk_memory_properties.memoryTypeCount; i++) {
+        if ((vk_memory_requrements.memoryTypeBits & (1 << i)) && (vk_memory_properties.memoryTypes[i].propertyFlags & p_properties) == p_properties) {
+            found = true;
+            memory_type_idx = i;
+            break;
+        }
+    }
+    if (!found) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to find valid memory type!", NULL);
+        return;
+    }
+
+    VkMemoryAllocateInfo memory_allocate_info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = vk_memory_requrements.size,
+        .memoryTypeIndex = memory_type_idx,
+    };
+
+    // Check max supported allocations, and use offset instead
+    error = vkAllocateMemory(p_device, &memory_allocate_info, NULL, p_buffer_memory);
+    if (error != VK_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to allocate vertex buffer!", NULL);
+        return;
+    }
+    vkBindBufferMemory(p_device, *p_buffer, *p_buffer_memory, 0);
+}
+
+typedef struct vect2 {
+    float x;
+    float y;
+} Vect2;
+
+typedef struct vect4 {
+    float r;
+    float g;
+    float b;
+    float a;
+} Vect4;
+
+typedef struct vertex {
+    Vect2 pos;
+    Vect4 color;
+} Vertex;
+
 int main(void) {
 
     // Init SDL
@@ -172,7 +238,7 @@ int main(void) {
             continue;
         }
         vkGetPhysicalDeviceQueueFamilyProperties(kv_physical_devices[i], &queue_family_count, queue_families);
-         if (error != VK_SUCCESS) {
+        if (error != VK_SUCCESS) {
             free(queue_families);
             continue;
         }
@@ -478,12 +544,31 @@ int main(void) {
     };
 
     // Create Fixed functions Pipelines
-    VkPipelineVertexInputStateCreateInfo vertex_input_state_create_info ={
+
+    // Define vertex data
+    VkPipelineVertexInputStateCreateInfo vertex_input_state_create_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .vertexBindingDescriptionCount = 0,
-        .pVertexBindingDescriptions = NULL,
-        .vertexAttributeDescriptionCount = 0,
-        .pVertexAttributeDescriptions = NULL,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &(VkVertexInputBindingDescription) {
+            .binding = 0,
+            .stride = sizeof(Vertex),
+            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+        },
+        .vertexAttributeDescriptionCount = 2,
+        .pVertexAttributeDescriptions = (VkVertexInputAttributeDescription[]) {
+            {
+                .binding = 0,
+                .location = 0,
+                .format = VK_FORMAT_R32G32_SFLOAT,
+                .offset = offsetof(Vertex, pos),
+            },
+            {
+                .binding = 0,
+                .location = 1,
+                .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+                .offset = offsetof(Vertex, color),
+            },
+        },
     };
 
     VkPipelineInputAssemblyStateCreateInfo input_assembly_state_create_info ={
@@ -732,6 +817,127 @@ int main(void) {
         goto vk_command_buffer;
     }
 
+    // Load vertex data
+    uint32_t total_vertex_count = 4;
+    Vertex traingle_vertex_data[] = {
+        {{-0.5, -0.5}, {1.0, 0.0, 0.0, 1.0}},
+        {{0.5, -0.5},  {0.0, 1.0, 0.0, 1.0}},
+        {{0.5, 0.5}, {0.0, 0.0, 1.0, 1.0}},
+        {{-0.5, 0.5}, {0.0, 1.0, 0.0, 1.0}},
+    };
+
+    // Staging
+    VkBuffer src_vk_vertex_buffer;
+    VkDeviceMemory src_vertext_buffer_memory;
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(Vertex) * total_vertex_count, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_vertex_buffer, &src_vertext_buffer_memory);
+
+    void *data;
+    vkMapMemory(vk_device, src_vertext_buffer_memory, 0, sizeof(Vertex) * total_vertex_count, 0, &data);
+    memcpy(data, traingle_vertex_data, sizeof(Vertex) * total_vertex_count);
+    vkUnmapMemory(vk_device, src_vertext_buffer_memory);
+
+    // Dest
+    VkBuffer vk_vertex_buffer;
+    VkDeviceMemory vertext_buffer_memory;
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(Vertex) * total_vertex_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_vertex_buffer, 	&vertext_buffer_memory);
+
+    // Copy Src to dest
+    // Can move to seperate command pool / buffer
+    VkCommandBufferAllocateInfo copy_cmd_buffer_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandPool = vk_command_pool,
+        .commandBufferCount = 1,
+    };
+
+    VkCommandBuffer copy_cmd_buffer;
+    vkAllocateCommandBuffers(vk_device, &copy_cmd_buffer_info, &copy_cmd_buffer);
+
+    VkCommandBufferBeginInfo copy_begin_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+
+    vkBeginCommandBuffer(copy_cmd_buffer, &copy_begin_info);
+
+    VkBufferCopy buffer_copy_cmd = {
+        .srcOffset = 0,
+        .dstOffset = 0,
+        .size = sizeof(Vertex) * total_vertex_count,
+    };
+    vkCmdCopyBuffer(copy_cmd_buffer, src_vk_vertex_buffer, vk_vertex_buffer, 1, &buffer_copy_cmd);
+
+    vkEndCommandBuffer(copy_cmd_buffer);
+
+    VkSubmitInfo copy_submit_info = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &copy_cmd_buffer,
+    };
+    vkQueueSubmit(vk_queue, 1, &copy_submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(vk_queue);
+
+    vkDestroyBuffer(vk_device, src_vk_vertex_buffer, NULL);
+    vkFreeMemory(vk_device, src_vertext_buffer_memory, NULL);
+
+    // Load Index Buffer
+    uint32_t total_index_count = 6;
+    uint16_t traingle_index_data[] = {
+        0, 1, 2, 2, 3, 0,
+    };
+
+    // Staging
+    VkBuffer src_vk_index_buffer;
+    VkDeviceMemory src_index_buffer_memory;
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint16_t) * total_index_count, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_index_buffer, &src_index_buffer_memory);
+
+    vkMapMemory(vk_device, src_index_buffer_memory, 0, sizeof(uint16_t) * total_index_count, 0, &data);
+    memcpy(data, traingle_index_data, sizeof(uint16_t) * total_index_count);
+    vkUnmapMemory(vk_device, src_index_buffer_memory);
+
+    // Dest
+    VkBuffer vk_index_buffer;
+    VkDeviceMemory index_buffer_memory;
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint16_t) * total_index_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_index_buffer, 	&index_buffer_memory);
+
+    // Copy Src to dest
+    // Can move to seperate command pool / buffer
+    VkCommandBufferAllocateInfo index_copy_cmd_buffer_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandPool = vk_command_pool,
+        .commandBufferCount = 1,
+    };
+
+    vkAllocateCommandBuffers(vk_device, &index_copy_cmd_buffer_info, &copy_cmd_buffer);
+
+    VkCommandBufferBeginInfo index_copy_begin_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+
+    vkBeginCommandBuffer(copy_cmd_buffer, &index_copy_begin_info);
+
+    VkBufferCopy index_buffer_copy_cmd = {
+        .srcOffset = 0,
+        .dstOffset = 0,
+        .size = sizeof(uint16_t) * total_index_count,
+    };
+    vkCmdCopyBuffer(copy_cmd_buffer, src_vk_index_buffer, vk_index_buffer, 1, &index_buffer_copy_cmd);
+
+    vkEndCommandBuffer(copy_cmd_buffer);
+
+    VkSubmitInfo index_copy_submit_info = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &copy_cmd_buffer,
+    };
+    vkQueueSubmit(vk_queue, 1, &index_copy_submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(vk_queue);
+
+    vkDestroyBuffer(vk_device, src_vk_index_buffer, NULL);
+    vkFreeMemory(vk_device, src_index_buffer_memory, NULL);
+
     // Main loop
     SDL_Event event;
 
@@ -813,7 +1019,15 @@ int main(void) {
         vkCmdSetViewport(vk_command_buffer, 0, 1, &vk_viewport);
         vkCmdSetScissor(vk_command_buffer, 0, 1, &vk_scissor);
 
-        vkCmdDraw(vk_command_buffer, 3, 1, 0, 0);
+        vkCmdBindPipeline(vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_graphics_pipeline);
+
+        VkBuffer vertexBuffers[] = {vk_vertex_buffer};
+        VkDeviceSize offsets[] = {0};
+        vkCmdBindVertexBuffers(vk_command_buffer, 0, 1, vertexBuffers, offsets);
+
+        vkCmdBindIndexBuffer(vk_command_buffer, vk_index_buffer, 0, VK_INDEX_TYPE_UINT16);
+
+        vkCmdDrawIndexed(vk_command_buffer, total_index_count, 1, 0, 0, 0);
 
         vkCmdEndRenderPass(vk_command_buffer);
         error = vkEndCommandBuffer(vk_command_buffer);
@@ -870,7 +1084,10 @@ int main(void) {
         }
     }
 
+    //vkDestroyBuffer(vk_device, vk_vertex_buffer, NULL);
+    //vkFreeMemory(vk_device, vertext_buffer_memory, NULL);
 //vk_fence:
+    vkDestroyBuffer(vk_device, vk_vertex_buffer, NULL);
     vkDestroyFence(vk_device, current_frame_fence, NULL);
 vk_command_buffer:
     vkFreeCommandBuffers(vk_device, vk_command_pool, 1, &vk_command_buffer);
