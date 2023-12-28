@@ -105,10 +105,22 @@ typedef struct vect3 {
 } Vect3;
 
 typedef struct vect4 {
-    float r;
-    float g;
-    float b;
-    float a;
+    union {
+        float r;
+        float x;
+    };
+    union {
+        float g;
+        float y;
+    };
+    union {
+        float b;
+        float z;
+    };
+    union {
+        float a;
+        float w;
+    };
 } Vect4;
 
 typedef float mat4[4][4];
@@ -146,11 +158,45 @@ Vect3 vect3_cross(Vect3 a, Vect3 b) {
     };
 }
 
+Vect3 vect3_add(Vect3 a, Vect3 b) {
+    return (Vect3) {
+        a.x + b.x,
+        a.y + b.y,
+        a.z + b.z
+    };
+}
+
 Vect3 vect3_sub(Vect3 a, Vect3 b) {
     return (Vect3) {
         a.x - b.x,
         a.y - b.y,
         a.z - b.z
+    };
+}
+
+Vect3 vect3_multi(Vect3 a, float b) {
+    return (Vect3) {
+        a.x * b,
+        a.y * b,
+        a.z * b
+    };
+}
+
+Vect4 eular_to_quant(float xRads, float yRads, float zRads) {
+    float c1 = (float)cos(xRads);
+    float s1 = (float)sin(xRads);
+    float c2 = (float)cos(yRads);
+    float s2 = (float)sin(yRads);
+    float c3 = (float)cos(zRads);
+    float s3 = (float)sin(zRads);
+    float w  = (float)sqrt(1.0 + c1 * c2 + c1*c3 - s1 * s2 * s3 + c2*c3) / 2.0f;
+    float w4 = (float)(4.0 * w);
+
+    return (Vect4) {
+        .x = (c2 * s3 + c1 * s3 + s1 * s2 * c3) / w4,
+        .y = (s1 * c2 + s1 * c3 + c1 * s2 * s3) / w4,
+        .z = (-s1 * s3 + c1 * s2 * c3 +s2) / w4,
+        .w = w,
     };
 }
 
@@ -241,9 +287,50 @@ void mat4_transform(mat4 mat, Vect3 v) {
     }
 }
 
+void mat4_multi(mat4 mat, mat4 b) {
+    mat4 ret_mtx;
+        for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            ret_mtx[i][j] = mat[i][j];
+        }
+    }
+
+    for (int i = 0; i < 4; i++) {
+        ret_mtx[i][0] = (mat[i][0] * b[0][0]) +
+                        (mat[i][1] * b[1][0]) +
+                        (mat[i][2] * b[2][0]) +
+                        (mat[i][3] * b[3][0]);
+
+        ret_mtx[i][1] = (mat[i][0] * b[0][1]) +
+                        (mat[i][1] * b[1][1]) +
+                        (mat[i][2] * b[2][1]) +
+                        (mat[i][3] * b[3][1]);
+
+        ret_mtx[i][2] = (mat[i][0] * b[0][2]) +
+                        (mat[i][1] * b[1][2]) +
+                        (mat[i][2] * b[2][2]) +
+                        (mat[i][3] * b[3][2]);
+
+        ret_mtx[i][3] = (mat[i][0] * b[0][3]) +
+                        (mat[i][1] * b[1][3]) +
+                        (mat[i][2] * b[2][3]) +
+                        (mat[i][3] * b[3][3]);
+    }
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            mat[i][j] = ret_mtx[i][j];
+        }
+    }
+}
+
 
 float degtorad(float degrees) {
     return (float)(degrees * 3.1415) / 180;
+}
+
+float radtodeg(float rads) {
+    return (float)(rads * 180) / 3.1415f;
 }
 
 int main(void) {
@@ -718,7 +805,7 @@ int main(void) {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         .depthClampEnable = VK_FALSE,
         .polygonMode = VK_POLYGON_MODE_FILL,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .cullMode = VK_CULL_MODE_NONE,
         .frontFace = VK_FRONT_FACE_CLOCKWISE,
         .depthBiasEnable = VK_FALSE,
         .depthBiasConstantFactor = 0.0,
@@ -1031,10 +1118,10 @@ int main(void) {
     // Load vertex data
     uint32_t total_vertex_count = 4;
     Vertex traingle_vertex_data[] = {
-        {{-0.5, -0.5}, {1.0, 0.0, 0.0, 1.0}},
-        {{0.5, -0.5},  {0.0, 1.0, 0.0, 1.0}},
-        {{0.5, 0.5}, {0.0, 0.0, 1.0, 1.0}},
-        {{-0.5, 0.5}, {0.0, 1.0, 0.0, 1.0}},
+        {{-0.5, -0.5},{ {1.0}, {0.0}, {0.0}, {1.0}}},
+        {{0.5, -0.5}, { {0.0}, {1.0}, {0.0}, {1.0}}},
+        {{0.5, 0.5},  { {0.0}, {0.0}, {1.0}, {1.0}}},
+        {{-0.5, 0.5}, { {0.0}, {1.0}, {0.0}, {1.0}}},
     };
 
     // Staging
@@ -1160,7 +1247,11 @@ int main(void) {
     int32_t tick = 0;
     uptime = 0;
 
-    //Uint32 camera_last_update = lastTime;
+    bool mouse_capture = false;
+    Vect3 camera_pos = {-2, 0, -2};
+    float pitch = 0;
+    float yaw = 45;
+    Vect3 camera_rot = {0.7f, 0.04f, 0.66f};
 
     float rot = 0;
     bool running = true;
@@ -1171,15 +1262,61 @@ int main(void) {
 
         while (delta >= 1) {
 
-            // Update
-
             while(SDL_PollEvent(&event)) {
                 if (event.type == SDL_QUIT) {
                     running = false;
                     break;
                 }
 
+                if (event.type == SDL_MOUSEMOTION) {
+                    yaw += ((float)event.motion.xrel) * 0.1f;
+                    pitch += ((float)event.motion.yrel) * 0.1f;
+
+                    if(pitch > 75.0f) {
+                       pitch = 75.0f;
+                    }
+                    if(pitch < -50.0f) {
+                       pitch = -50.0f;
+                    }
+
+                    camera_rot.x = (float)cos(degtorad(yaw)) * (float)cos(degtorad(pitch));
+                    camera_rot.y = (float)sin(degtorad(pitch));
+                    camera_rot.z = (float)sin(degtorad(yaw)) * (float)cos(degtorad(pitch));
+                    camera_rot = vect3_normalise(camera_rot);
+                    if (mouse_capture) {
+                        SDL_WarpMouseInWindow(window, (int)(window_width / 2), (int)(window_height / 2));
+                    }
+                }
+
+
+                if (event.type == SDL_MOUSEBUTTONDOWN) {
+                    mouse_capture = true;
+                    SDL_SetRelativeMouseMode(SDL_TRUE);
+                }
+
+                if (event.key.keysym.sym == SDLK_ESCAPE) {
+                    mouse_capture = false;
+                    SDL_SetRelativeMouseMode(SDL_FALSE);
+                }
+
                 // Event
+            }
+
+            // Update
+            const Uint8 *keystates =  SDL_GetKeyboardState( NULL );
+            if (keystates[SDL_SCANCODE_W]) {
+                camera_pos = vect3_add(camera_pos, vect3_multi(camera_rot, 0.1f * (float)delta));
+            }
+            if (keystates[SDL_SCANCODE_S]) {
+                camera_pos = vect3_sub(camera_pos, vect3_multi(camera_rot, 0.1f * (float)delta));
+            }
+
+            if (keystates[SDL_SCANCODE_A]) {
+                camera_pos = vect3_sub(camera_pos, vect3_multi(vect3_normalise(vect3_cross(camera_rot, (Vect3){0, 1, 0})), 0.1f * (float)delta));
+            }
+
+            if (keystates[SDL_SCANCODE_D]) {
+                camera_pos = vect3_add(camera_pos, vect3_multi(vect3_normalise(vect3_cross(camera_rot, (Vect3){0, 1, 0})), 0.1f * (float)delta));
             }
 
             tick++;
@@ -1197,7 +1334,7 @@ int main(void) {
                 {1, 0, 0, 0},
                 {0, 1, 0, 0},
                 {0, 0, 1, 0},
-                {0, -0.5, 0, 1},
+                {0, 0, 0, 1},
             },
             .view = {
                 {1, 0, 0, 0},
@@ -1217,8 +1354,11 @@ int main(void) {
         if (rot > 360) {
             rot = 0;
         }
-        mat4_rotate(camera_bufffer.model,  degtorad(rot), (Vect3){0, 1, 1});
-        mat4_look_at(camera_bufffer.view, (Vect3){2, 2, 2}, (Vect3){0, 0, 0,}, (Vect3){0, 0, 1});
+        mat4_rotate(camera_bufffer.model,  degtorad(rot), (Vect3){0, 1, 0});
+
+        Vect3 forward_vect = vect3_add(camera_pos, camera_rot);
+        mat4_look_at(camera_bufffer.view, camera_pos, forward_vect, (Vect3){0, 1, 0});
+
         mat4_perspective(camera_bufffer.proj, degtorad(45), (float)device_extent2D.width / (float)device_extent2D.height, (float)0.1, (float)10.0);
         camera_bufffer.proj[1][1] *= -1;
 
