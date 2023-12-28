@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <math.h>
 #include <SDL2/SDL.h>
 #include <vulkan/vulkan.h>
 #include <SDL2/SDL_vulkan.h>
@@ -97,6 +98,12 @@ typedef struct vect2 {
     float y;
 } Vect2;
 
+typedef struct vect3 {
+    float x;
+    float y;
+    float z;
+} Vect3;
+
 typedef struct vect4 {
     float r;
     float g;
@@ -104,10 +111,140 @@ typedef struct vect4 {
     float a;
 } Vect4;
 
+typedef float mat4[4][4];
+
 typedef struct vertex {
     Vect2 pos;
     Vect4 color;
 } Vertex;
+
+typedef struct CameraBuffer {
+    mat4 model;
+    mat4 view;
+    mat4 proj;
+} CameraBuffer;
+
+Vect3 vect3_normalise(Vect3 a) {
+    float v = (float)sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+    return (Vect3) {
+        a.x / v,
+        a.y / v,
+        a.z / v
+    };
+}
+
+// Need to negate?
+float vect3_dot(Vect3 a, Vect3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+Vect3 vect3_cross(Vect3 a, Vect3 b) {
+    return (Vect3) {
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    };
+}
+
+Vect3 vect3_sub(Vect3 a, Vect3 b) {
+    return (Vect3) {
+        a.x - b.x,
+        a.y - b.y,
+        a.z - b.z
+    };
+}
+
+void mat4_rotate(mat4 mat, float rads, Vect3 a) {
+    float c = (float)cos(rads);
+    float s = (float)sin(rads);
+
+    Vect3 axis = vect3_normalise(a);
+    Vect3 temp = {(1 - c) * axis.x, (1 - c) * axis.y, (1 - c) * axis.z };
+
+    mat4 rot_mtx = {
+        {c + temp.x * axis.x, temp.x * axis.y + s * axis.z, temp.x * axis.z - s * axis.y, 0},
+        {temp.y * axis.x - s * axis.z, c + temp.y * axis.y, temp.y * axis.z + s * axis.x, 0},
+        {temp.z * axis.x + s * axis.y, temp.z * axis.y - s * axis.x, c + temp.z * axis.z, 0},
+        {0, 0, 0, 1},
+    };
+
+    mat4 ret_mtx;
+    for(int i = 0; i < 4; i++) {
+        for(int j = 0; j < 4; j++) {
+            float num = 0;
+            for(int k = 0; k < 4 ; k++) {
+                num += mat[i][k] * rot_mtx[k][j];
+            }
+            ret_mtx[i][j]=num;
+        }
+    }
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            mat[i][j] = ret_mtx[i][j];
+        }
+    }
+}
+
+//    eye: position of camera in world space
+// center: where you want to look at, in world space
+//     up: Where is up
+void mat4_look_at(mat4 mat, Vect3 eye, Vect3 center, Vect3 up) {
+    Vect3 f = vect3_normalise(vect3_sub(center, eye));
+    Vect3 s = vect3_normalise(vect3_cross(up, f));
+    Vect3 u = vect3_cross(f, s);
+
+    mat[0][0] = s.x;
+    mat[1][0] = s.y;
+    mat[2][0] = s.z;
+
+    mat[0][1] = u.x;
+    mat[1][1] = u.y;
+    mat[2][1] = u.z;
+
+    mat[0][2] = f.x;
+    mat[1][2] = f.y;
+    mat[2][2] = f.z;
+
+    mat[3][0] = vect3_dot(s, eye);
+    mat[3][1] = vect3_dot(u, eye);
+    mat[3][2] = vect3_dot(f, eye);
+}
+
+void mat4_perspective(mat4 mat, float angle, float aspect, float znear, float zfar) {
+    float tan_half_angle = (float)tan(angle / 2);
+
+    mat[0][0] = 1 / (aspect * tan_half_angle);
+    mat[1][1] = 1 / tan_half_angle;
+    mat[2][2] = -(zfar + znear) / (zfar - znear);
+    mat[2][3] = -1;
+    mat[3][2] = -(2 * zfar * znear) / (zfar - znear);
+}
+
+void mat4_transform(mat4 mat, Vect3 v) {
+    mat4 ret_mtx;
+     for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            ret_mtx[i][j] = mat[i][j];
+        }
+    }
+
+    ret_mtx[3][0] = mat[0][0] * v.x + mat[1][0] * v.y + mat[2][0] * v.z + mat[3][0];
+    ret_mtx[3][1] = mat[0][1] * v.x + mat[1][1] * v.y + mat[2][1] * v.z + mat[3][1];
+    ret_mtx[3][2] = mat[0][2] * v.x + mat[1][2] * v.y + mat[2][2] * v.z + mat[3][2];
+    ret_mtx[3][3] = mat[0][3] * v.x + mat[1][3] * v.y + mat[2][3] * v.z + mat[3][3];
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            mat[i][j] = ret_mtx[i][j];
+        }
+    }
+}
+
+
+float degtorad(float degrees) {
+    return (float)(degrees * 3.1415) / 180;
+}
 
 int main(void) {
 
@@ -651,11 +788,85 @@ int main(void) {
         .scissorCount = 1,
     };
 
+    // Create Descriptor Set
+    VkDescriptorSetLayoutCreateInfo camera_descriptor_set_create_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &(VkDescriptorSetLayoutBinding) {
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .pImmutableSamplers = NULL,
+        },
+    };
+
+    VkDescriptorSetLayout camera_descriptor_set_layout = {};
+    error = vkCreateDescriptorSetLayout(vk_device, &camera_descriptor_set_create_info, NULL, &camera_descriptor_set_layout);
+    if (error != VK_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create camera descriptor set!", NULL);
+        exit(0);
+    }
+
+    VkBuffer camera_data_buffer = {};
+    VkDeviceMemory camera_data_buffer_memory = {};
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(CameraBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &camera_data_buffer, &camera_data_buffer_memory);
+
+    void *camera_data_ptr;
+    vkMapMemory(vk_device, camera_data_buffer_memory, 0, sizeof(CameraBuffer), 0, &camera_data_ptr);
+
+    // Create Descriptor pool
+    VkDescriptorPoolCreateInfo descriptor_pool_create_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .poolSizeCount = 1,
+        .pPoolSizes = &(VkDescriptorPoolSize) {
+            .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+        },
+        .maxSets = 1,
+    };
+
+    VkDescriptorPool vk_descriptor_pool = {};
+    error = vkCreateDescriptorPool(vk_device, &descriptor_pool_create_info, NULL, &vk_descriptor_pool);
+    if (error != VK_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create descriptor pool!", NULL);
+        exit(0);
+    }
+
+    // Allocate DescriptorSets
+    VkDescriptorSetAllocateInfo descriptor_set_allocate_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = vk_descriptor_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &camera_descriptor_set_layout,
+    };
+
+    VkDescriptorSet vk_descriptor_sets;
+    error = vkAllocateDescriptorSets(vk_device, &descriptor_set_allocate_info, &vk_descriptor_sets);
+
+    // Set up writes
+    VkWriteDescriptorSet write_descriptor_set = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = vk_descriptor_sets,
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .pBufferInfo = &(VkDescriptorBufferInfo) {
+            .buffer = camera_data_buffer,
+            .offset = 0,
+            .range = sizeof(CameraBuffer),
+        },
+        .pImageInfo = NULL,
+        .pTexelBufferView = NULL,
+    };
+    vkUpdateDescriptorSets(vk_device, 1, &write_descriptor_set, 0, NULL);
+
     // Create the Pipeline layout
     VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .setLayoutCount = 0,
-        .pSetLayouts = NULL,
+        .setLayoutCount = 1,
+        .pSetLayouts = &camera_descriptor_set_layout,
         .pushConstantRangeCount = 0,
         .pPushConstantRanges = NULL,
     };
@@ -839,7 +1050,7 @@ int main(void) {
     // Dest
     VkBuffer vk_vertex_buffer;
     VkDeviceMemory vertext_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(Vertex) * total_vertex_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_vertex_buffer, 	&vertext_buffer_memory);
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(Vertex) * total_vertex_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_vertex_buffer, &vertext_buffer_memory);
 
     // Copy Src to dest
     // Can move to seperate command pool / buffer
@@ -898,7 +1109,7 @@ int main(void) {
     // Dest
     VkBuffer vk_index_buffer;
     VkDeviceMemory index_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint16_t) * total_index_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_index_buffer, 	&index_buffer_memory);
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint16_t) * total_index_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_index_buffer, &index_buffer_memory);
 
     // Copy Src to dest
     // Can move to seperate command pool / buffer
@@ -949,6 +1160,9 @@ int main(void) {
     int32_t tick = 0;
     uptime = 0;
 
+    //Uint32 camera_last_update = lastTime;
+
+    float rot = 0;
     bool running = true;
     while (running) {
         Uint32 now = SDL_GetTicks();
@@ -976,6 +1190,39 @@ int main(void) {
         // Render
         vkWaitForFences(vk_device, 1, &current_frame_fence, VK_TRUE, UINT64_MAX);
         vkResetFences(vk_device, 1, &current_frame_fence);
+
+        // Create CameraBuffer
+        CameraBuffer camera_bufffer = {
+            .model = {
+                {1, 0, 0, 0},
+                {0, 1, 0, 0},
+                {0, 0, 1, 0},
+                {0, -0.5, 0, 1},
+            },
+            .view = {
+                {1, 0, 0, 0},
+                {0, 1, 0, 0},
+                {0, 0, 1, 0},
+                {0, 0, 0, 1},
+            },
+            .proj = {
+                {0, 0, 0, 0},
+                {0, 0, 0, 0},
+                {0, 0, 0, 0},
+                {0, 0, 0, 0},
+            },
+        };
+
+        rot++;
+        if (rot > 360) {
+            rot = 0;
+        }
+        mat4_rotate(camera_bufffer.model,  degtorad(rot), (Vect3){0, 1, 1});
+        mat4_look_at(camera_bufffer.view, (Vect3){2, 2, 2}, (Vect3){0, 0, 0,}, (Vect3){0, 0, 1});
+        mat4_perspective(camera_bufffer.proj, degtorad(45), (float)device_extent2D.width / (float)device_extent2D.height, (float)0.1, (float)10.0);
+        camera_bufffer.proj[1][1] *= -1;
+
+        memcpy(camera_data_ptr, &camera_bufffer, sizeof(CameraBuffer));
 
         uint32_t imageIndex;
         vkAcquireNextImageKHR(vk_device, vk_swapchain, UINT64_MAX, vk_image_available_semaphore, VK_NULL_HANDLE, &imageIndex);
@@ -1026,6 +1273,7 @@ int main(void) {
         vkCmdBindVertexBuffers(vk_command_buffer, 0, 1, vertexBuffers, offsets);
 
         vkCmdBindIndexBuffer(vk_command_buffer, vk_index_buffer, 0, VK_INDEX_TYPE_UINT16);
+        vkCmdBindDescriptorSets(vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pipieline_layout, 0, 1, &vk_descriptor_sets, 0, NULL);
 
         vkCmdDrawIndexed(vk_command_buffer, total_index_count, 1, 0, 0, 0);
 
@@ -1084,6 +1332,7 @@ int main(void) {
         }
     }
 
+    //vkDestroyDescriptorSetLayout(vk_device, camera_descriptor_set_create_info, NULL);
     //vkDestroyBuffer(vk_device, vk_vertex_buffer, NULL);
     //vkFreeMemory(vk_device, vertext_buffer_memory, NULL);
 //vk_fence:

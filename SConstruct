@@ -4,8 +4,8 @@ EnsureSConsVersion(3, 0, 0)
 EnsurePythonVersion(3, 6)
 
 env = Environment(CPPPATH=['usr/include', '/opt/local/include','#.'])
-env.Append(CCFLAGS=["-g3", "-Werror", "-Wextra", "-Wall", "-Wshadow", "-Wfloat-equal", "-Wpointer-arith", "-Wcast-align", "-Wstrict-prototypes", "-Wstrict-overflow=5", "-Wwrite-strings", "-Waggregate-return", "-Wcast-qual", "-Wswitch-default", "-Wswitch-enum", "-Wconversion", "-Wunreachable-code", "-Wformat=2", "-D_REENTRANT"])
-env.Append(LIBS=['SDL2main','SDL2', 'vulkan']);
+env.Append(CCFLAGS=["-g3", "-Werror", "-Wextra", "-Wall", "-Wshadow", "-Wfloat-equal", "-Wpointer-arith", "-Wcast-align", "-Wstrict-prototypes", "-Wstrict-overflow=5", "-Wwrite-strings", "-Wcast-qual", "-Wswitch-default", "-Wswitch-enum", "-Wconversion", "-Wunreachable-code", "-Wformat=2", "-D_REENTRANT"])
+env.Append(LIBS=['SDL2main','SDL2', 'vulkan', 'm']);
 
 def add_sources(self, sources, filetype, lib_env = None, shared = False):
 	import glob;
