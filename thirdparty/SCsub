@@ -1,0 +1,10 @@
+#!/usr/bin/env python
+
+Import('env');
+Export('env');
+
+targets=[]
+
+env.add_sources(targets, "*.c")
+
+env.libs+=env.Library('src', targets);

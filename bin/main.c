@@ -1,8 +1,19 @@
 #include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <math.h>
 #include <SDL2/SDL.h>
 #include <vulkan/vulkan.h>
 #include <SDL2/SDL_vulkan.h>
+
+#define TINYOBJ_LOADER_C_IMPLEMENTATION
+#include "thirdparty/tinyobj_loader_c/tinyobj_loader_c.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
@@ -337,7 +348,121 @@ float radtodeg(float rads) {
     return (float)(rads * 180) / 3.1415f;
 }
 
+static char* mmap_file(size_t* len, const char* filename) {
+  struct stat sb;
+  char* p;
+  int fd;
+
+  fd = open(filename, O_RDONLY);
+  if (fd == -1) {
+    perror("open");
+    return NULL;
+  }
+
+  if (fstat(fd, &sb) == -1) {
+    perror("fstat");
+    return NULL;
+  }
+
+  if (!S_ISREG(sb.st_mode)) {
+    fprintf(stderr, "%s is not a file\n", filename);
+    return NULL;
+  }
+
+  p = (char*)mmap(0, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+
+  if (p == MAP_FAILED) {
+    perror("mmap");
+    return NULL;
+  }
+
+  if (close(fd) == -1) {
+    perror("close");
+    return NULL;
+  }
+
+  (*len) = sb.st_size;
+
+  return p;
+}
+
+static void get_file_data(void* ctx, const char* filename, const int is_mtl,
+                          const char* obj_filename, char** data, size_t* len) {
+  // NOTE: If you allocate the buffer with malloc(),
+  // You can define your own memory management struct and pass it through `ctx`
+  // to store the pointer and free memories at clean up stage(when you quit an
+  // app)
+  // This example uses mmap(), so no free() required.
+  (void)ctx;
+
+    printf("%s %i", obj_filename, is_mtl);
+  if (!filename) {
+    fprintf(stderr, "null filename\n");
+    (*data) = NULL;
+    (*len) = 0;
+    return;
+  }
+
+  size_t data_len = 0;
+
+  *data = mmap_file(&data_len, filename);
+  (*len) = data_len;
+}
+
 int main(void) {
+
+    // Load model data
+    char *base_path = SDL_GetBasePath();
+
+    char model_path[256];
+    sprintf(model_path, "%s%s", base_path, "resources/viking_room.obj");
+
+    tinyobj_attrib_t attrib;
+    tinyobj_shape_t* shapes = NULL;
+    size_t num_shapes;
+    tinyobj_material_t* materials = NULL;
+    size_t num_materials;
+
+    unsigned int flags = TINYOBJ_FLAG_TRIANGULATE;
+    int ret = tinyobj_parse_obj(&attrib, &shapes, &num_shapes, &materials, &num_materials, model_path, get_file_data, NULL, flags);
+    if (ret != TINYOBJ_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Tiny OBJ", "FATAL: Failed to load model!", NULL);
+        return -1;
+    }
+
+    Vertex *vertexes = malloc(sizeof(Vertex) * attrib.num_faces);
+    if (!vertexes) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "vk renderer", "FATAL: Failed to allocate memory for model!", NULL);
+        return -1;
+    }
+
+    uint32_t total_index_count = 0;
+    uint32_t *indices = malloc(sizeof(uint32_t) * attrib.num_faces);
+
+    uint32_t total_vertex_count = 0;
+    for (unsigned int i = 0; i < attrib.num_faces; i++) {
+        total_index_count++;
+        indices[i] = i;
+
+        total_vertex_count++;
+        vertexes[i] = (Vertex) {
+            .pos = {
+                attrib.vertices[3 * attrib.faces[i].v_idx + 0],
+                attrib.vertices[3 * attrib.faces[i].v_idx + 1],
+                attrib.vertices[3 * attrib.faces[i].v_idx + 2],
+            },
+            .color = {
+                {1.0f - i % 2},
+                {1.0f - i % 3},
+                {1.0f},
+                {1.0f},
+            },
+            .tex_coord = {
+                attrib.texcoords[2 * attrib.faces[i].vt_idx + 0],
+                1.0f - attrib.texcoords[2 * attrib.faces[i].vt_idx + 1]
+            }
+        };
+    }
 
     // Init SDL
     if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
@@ -737,7 +862,6 @@ int main(void) {
     }
 
     // Load and Create shaders
-    char *base_path = SDL_GetBasePath();
     char shader_path[256];
 
     sprintf(shader_path, "%s%s", base_path, "shaders/vert_shader.spv");
@@ -1261,7 +1385,7 @@ int main(void) {
     int texture_channels = 0;
 
     char image_path[256];
-    sprintf(image_path, "%s%s", base_path, "resources/test_image.jpg");
+    sprintf(image_path, "%s%s", base_path, "resources/viking_room.png");
     stbi_uc* pixels = stbi_load(image_path, &texture_width, &texture_height, &texture_channels, STBI_rgb_alpha);
     if (!pixels) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed load test image!", NULL);
@@ -1529,7 +1653,7 @@ int main(void) {
     }
 
     // Load vertex data
-    uint32_t total_vertex_count = 8;
+    /*uint32_t total_vertex_count = 8;
     Vertex traingle_vertex_data[] = {
         {{-0.5, -0.5, 0.0}, { {1.0}, {0.0}, {0.0}, {1.0} }, {0, 1}},
         {{ 0.5, -0.5, 0.0}, { {0.0}, {1.0}, {0.0}, {1.0} }, {1, 1}},
@@ -1540,7 +1664,7 @@ int main(void) {
         {{ 0.5, -0.5, -0.5f}, { {0.0}, {1.0}, {0.0}, {1.0} }, {1, 1}},
         {{ 0.5,  0.5, -0.5f}, { {0.0}, {0.0}, {1.0}, {1.0} }, {1, 0}},
         {{-0.5,  0.5, -0.5f}, { {0.0}, {1.0}, {0.0}, {1.0} }, {0, 0}},
-    };
+    };*/
 
     // Staging
     VkBuffer src_vk_vertex_buffer;
@@ -1549,7 +1673,7 @@ int main(void) {
 
     void *data;
     vkMapMemory(vk_device, src_vertext_buffer_memory, 0, sizeof(Vertex) * total_vertex_count, 0, &data);
-    memcpy(data, traingle_vertex_data, sizeof(Vertex) * total_vertex_count);
+    memcpy(data, vertexes, sizeof(Vertex) * total_vertex_count);
     vkUnmapMemory(vk_device, src_vertext_buffer_memory);
 
     // Dest
@@ -1597,25 +1721,25 @@ int main(void) {
     vkFreeMemory(vk_device, src_vertext_buffer_memory, NULL);
 
     // Load Index Buffer
-    uint32_t total_index_count = 12;
+    /*uint32_t total_index_count = 1;
     uint16_t traingle_index_data[] = {
         0, 1, 2, 2, 3, 0,
         4, 5, 6, 6, 7, 4
-    };
+    };*/
 
     // Staging
     VkBuffer src_vk_index_buffer;
     VkDeviceMemory src_index_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint16_t) * total_index_count, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_index_buffer, &src_index_buffer_memory);
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint32_t) * total_index_count, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_index_buffer, &src_index_buffer_memory);
 
-    vkMapMemory(vk_device, src_index_buffer_memory, 0, sizeof(uint16_t) * total_index_count, 0, &data);
-    memcpy(data, traingle_index_data, sizeof(uint16_t) * total_index_count);
+    vkMapMemory(vk_device, src_index_buffer_memory, 0, sizeof(uint32_t) * total_index_count, 0, &data);
+    memcpy(data, indices, sizeof(uint32_t) * total_index_count);
     vkUnmapMemory(vk_device, src_index_buffer_memory);
 
     // Dest
     VkBuffer vk_index_buffer;
     VkDeviceMemory index_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint16_t) * total_index_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_index_buffer, &index_buffer_memory);
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint32_t) * total_index_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_index_buffer, &index_buffer_memory);
 
     // Copy Src to dest
     // Can move to seperate command pool / buffer
@@ -1638,7 +1762,7 @@ int main(void) {
     VkBufferCopy index_buffer_copy_cmd = {
         .srcOffset = 0,
         .dstOffset = 0,
-        .size = sizeof(uint16_t) * total_index_count,
+        .size = sizeof(uint32_t) * total_index_count,
     };
     vkCmdCopyBuffer(copy_cmd_buffer, src_vk_index_buffer, vk_index_buffer, 1, &index_buffer_copy_cmd);
 
@@ -1807,7 +1931,7 @@ int main(void) {
         if (rot > 360) {
             rot = 0;
         }
-        mat4_rotate(camera_bufffer.model,  degtorad(rot), (Vect3){0, 1, 0});
+        mat4_rotate(camera_bufffer.model,  degtorad(90), (Vect3){-1, 0, 0});
 
         Vect3 forward_vect = vect3_add(camera_pos, camera_rot);
         mat4_look_at(camera_bufffer.view, camera_pos, forward_vect, (Vect3){0, 1, 0});
@@ -1873,7 +1997,7 @@ int main(void) {
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(vk_command_buffer, 0, 1, vertexBuffers, offsets);
 
-        vkCmdBindIndexBuffer(vk_command_buffer, vk_index_buffer, 0, VK_INDEX_TYPE_UINT16);
+        vkCmdBindIndexBuffer(vk_command_buffer, vk_index_buffer, 0, VK_INDEX_TYPE_UINT32);
         vkCmdBindDescriptorSets(vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pipieline_layout, 0, 1, &vk_descriptor_sets, 0, NULL);
 
         vkCmdDrawIndexed(vk_command_buffer, total_index_count, 1, 0, 0, 0);
