@@ -129,7 +129,7 @@ typedef struct vect4 {
 typedef float mat4[4][4];
 
 typedef struct vertex {
-    Vect2 pos;
+    Vect3 pos;
     Vect4 color;
     Vect2 tex_coord;
 } Vertex;
@@ -436,6 +436,7 @@ int main(void) {
     VkSurfaceFormatKHR device_surface_format = {};
     VkPresentModeKHR device_present_mode = {};
     VkExtent2D device_extent2D = {};
+    VkFormat device_depth_format;
     VkSurfaceTransformFlagBitsKHR device_pre_transform = {};
     for (uint32_t i = 0; i < device_count; i++) {
         uint32_t score = 0;
@@ -590,6 +591,31 @@ int main(void) {
         }
 
         free(device_presents_modes);
+
+        // Check for depth format
+        found = false;
+        VkImageTiling search_tiling = VK_IMAGE_TILING_OPTIMAL;
+        VkFormat search_formats[] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT};
+        VkFormatFeatureFlags search_features = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        for (int j = 0; j < 3; j++) {
+            VkFormatProperties props;
+            vkGetPhysicalDeviceFormatProperties(kv_physical_devices[i], search_formats[j], &props);
+
+            if (search_tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & search_features) == search_features) {
+                found = true;
+                device_depth_format = search_formats[j];
+                break;
+            }
+
+            if (search_tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & search_features) == search_features) {
+                found = true;
+                device_depth_format = search_formats[j];
+                break;
+            }
+        }
+        if (!found) {
+            continue;
+        }
 
         if (score > device_score) {
             device_idx = i;
@@ -787,7 +813,7 @@ int main(void) {
             {
                 .binding = 0,
                 .location = 0,
-                .format = VK_FORMAT_R32G32_SFLOAT,
+                .format = VK_FORMAT_R32G32B32_SFLOAT,
                 .offset = offsetof(Vertex, pos),
             },
             {
@@ -975,34 +1001,52 @@ int main(void) {
     // Create render passes
     VkRenderPassCreateInfo render_pass_create_info = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .attachmentCount = 1,
-        .pAttachments = &(VkAttachmentDescription) {
-            .format = device_surface_format.format,
-            .samples = VK_SAMPLE_COUNT_1_BIT,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .attachmentCount = 2,
+        .pAttachments = (VkAttachmentDescription[]) {
+            {
+                .format = device_surface_format.format,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            },
+            {
+                .format = device_depth_format,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            }
         },
         .subpassCount = 1,
-        .pSubpasses = &(VkSubpassDescription) {
-            .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-            .colorAttachmentCount = 1,
-            .pColorAttachments = &(VkAttachmentReference) {
-                .attachment = 0,
-                .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .pSubpasses = (VkSubpassDescription[]) {
+            {
+                .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+                .colorAttachmentCount = 1,
+                .pColorAttachments = &(VkAttachmentReference) {
+                    .attachment = 0,
+                    .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                },
+                .pDepthStencilAttachment = &(VkAttachmentReference) {
+                    .attachment = 1,
+                    .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                },
             },
         },
         .dependencyCount = 1,
         .pDependencies = &(VkSubpassDependency) {
             .srcSubpass = VK_SUBPASS_EXTERNAL,
             .dstSubpass = 0,
-            .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
             .srcAccessMask = 0,
-            .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
         }
     };
 
@@ -1011,6 +1055,83 @@ int main(void) {
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create render pass!", NULL);
         goto cleanup_renderpass;
+    }
+
+    // Create depth buffer;
+    VkImageCreateInfo depth_image_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .extent.width = device_extent2D.width,
+        .extent.height = device_extent2D.height,
+        .extent.depth = 1,
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .format = device_depth_format,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+
+    VkImage depth_image;
+    error = vkCreateImage(vk_device, &depth_image_info, NULL, &depth_image);
+    if (error != VK_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create depth image!", NULL);
+        exit(0);
+    }
+
+    VkMemoryRequirements depth_mem_req;;
+    vkGetImageMemoryRequirements(vk_device, depth_image, &depth_mem_req);
+
+    VkPhysicalDeviceMemoryProperties depth_vk_memory_properties;
+    vkGetPhysicalDeviceMemoryProperties(kv_physical_devices[device_idx], &depth_vk_memory_properties);
+
+    uint32_t depth_memory_type_idx = 0;
+    uint32_t depth_prop = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    bool found = false;
+    for (uint32_t i = 0; i < depth_vk_memory_properties.memoryTypeCount; i++) {
+        if ((depth_mem_req.memoryTypeBits & (1 << i)) && (depth_vk_memory_properties.memoryTypes[i].propertyFlags & depth_prop) == depth_prop) {
+            found = true;
+            depth_memory_type_idx = i;
+            break;
+        }
+    }
+    if (!found) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to find valid depth memory type!", NULL);
+        exit(0);
+    }
+
+    VkMemoryAllocateInfo depth_alloc_info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = depth_mem_req.size,
+        .memoryTypeIndex = depth_memory_type_idx,
+    };
+
+    VkDeviceMemory depth_image_memory;
+    if (vkAllocateMemory(vk_device, &depth_alloc_info, NULL, &depth_image_memory) != VK_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to allocate memory for depth image!", NULL);
+        exit(0);
+    }
+    vkBindImageMemory(vk_device, depth_image, depth_image_memory, 0);
+
+        VkImageViewCreateInfo depth_image_view_create_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = depth_image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = device_depth_format,
+        .subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+        .subresourceRange.baseMipLevel = 0,
+        .subresourceRange.levelCount = 1,
+        .subresourceRange.baseArrayLayer = 0,
+        .subresourceRange.layerCount = 1,
+    };
+
+    VkImageView depth_image_view;
+    error = vkCreateImageView(vk_device, &depth_image_view_create_info, NULL, &depth_image_view);
+    if (error != VK_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create depth image view!", NULL);
+        exit(0);
     }
 
     // Create Graphics pipeline
@@ -1026,7 +1147,18 @@ int main(void) {
         .pViewportState = &viewport_state_create_info,
         .pRasterizationState = &rasterizer_state_create_info,
         .pMultisampleState = &multisample_state_create_info,
-        .pDepthStencilState = NULL,
+        .pDepthStencilState = &(VkPipelineDepthStencilStateCreateInfo){
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .depthTestEnable = VK_TRUE,
+            .depthWriteEnable = VK_TRUE,
+            .depthCompareOp = VK_COMPARE_OP_LESS,
+            .depthBoundsTestEnable = VK_FALSE,
+            .minDepthBounds = 0.0f,
+            .maxDepthBounds = 1.0f,
+            .stencilTestEnable = VK_FALSE,
+            .front = {},
+            .back = {},
+        },
         .pColorBlendState = &color_blend_state_create_info,
         .pDynamicState = &dynamic_state_create_info,
         .layout = vk_pipieline_layout,
@@ -1054,9 +1186,10 @@ int main(void) {
         VkFramebufferCreateInfo frame_buffer_create_info = {
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .renderPass = vk_render_pass,
-            .attachmentCount = 1,
+            .attachmentCount = 2,
             .pAttachments = (VkImageView[]) {
                 vk_image_views[i],
+                depth_image_view,
             },
             .width = device_extent2D.width,
             .height = device_extent2D.height,
@@ -1179,7 +1312,7 @@ int main(void) {
 
     uint32_t image_memory_type_idx = 0;
     uint32_t image_prop = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-    bool found = false;
+    found = false;
     for (uint32_t i = 0; i < image_vk_memory_properties.memoryTypeCount; i++) {
         if ((image_memory_requirements.memoryTypeBits & (1 << i)) && (image_vk_memory_properties.memoryTypes[i].propertyFlags & image_prop) == image_prop) {
             found = true;
@@ -1396,12 +1529,17 @@ int main(void) {
     }
 
     // Load vertex data
-    uint32_t total_vertex_count = 4;
+    uint32_t total_vertex_count = 8;
     Vertex traingle_vertex_data[] = {
-        {{-0.5, -0.5},{ {1.0}, {0.0}, {0.0}, {1.0} }, {0, 1}},
-        {{0.5, -0.5}, { {0.0}, {1.0}, {0.0}, {1.0} }, {1, 1}},
-        {{0.5, 0.5},  { {0.0}, {0.0}, {1.0}, {1.0} }, {1, 0}},
-        {{-0.5, 0.5}, { {0.0}, {1.0}, {0.0}, {1.0} }, {0, 0}},
+        {{-0.5, -0.5, 0.0}, { {1.0}, {0.0}, {0.0}, {1.0} }, {0, 1}},
+        {{ 0.5, -0.5, 0.0}, { {0.0}, {1.0}, {0.0}, {1.0} }, {1, 1}},
+        {{ 0.5,  0.5, 0.0}, { {0.0}, {0.0}, {1.0}, {1.0} }, {1, 0}},
+        {{-0.5,  0.5, 0.0}, { {0.0}, {1.0}, {0.0}, {1.0} }, {0, 0}},
+
+        {{-0.5, -0.5, -0.5f}, { {1.0}, {0.0}, {0.0}, {1.0} }, {0, 1}},
+        {{ 0.5, -0.5, -0.5f}, { {0.0}, {1.0}, {0.0}, {1.0} }, {1, 1}},
+        {{ 0.5,  0.5, -0.5f}, { {0.0}, {0.0}, {1.0}, {1.0} }, {1, 0}},
+        {{-0.5,  0.5, -0.5f}, { {0.0}, {1.0}, {0.0}, {1.0} }, {0, 0}},
     };
 
     // Staging
@@ -1459,9 +1597,10 @@ int main(void) {
     vkFreeMemory(vk_device, src_vertext_buffer_memory, NULL);
 
     // Load Index Buffer
-    uint32_t total_index_count = 6;
+    uint32_t total_index_count = 12;
     uint16_t traingle_index_data[] = {
         0, 1, 2, 2, 3, 0,
+        4, 5, 6, 6, 7, 4
     };
 
     // Staging
@@ -1704,10 +1843,18 @@ int main(void) {
                 .offset = {0, 0},
                 .extent = device_extent2D,
             },
-            .clearValueCount = 1,
-            .pClearValues = &(VkClearValue) {
-                .color = {
-                    .float32 = {0.0f, 0.0f, 0.0f, 0.0f},
+            .clearValueCount = 2,
+            .pClearValues = (VkClearValue[]) {
+                {
+                    .color = {
+                        .float32 = {0.0f, 0.0f, 0.0f, 0.0f},
+                    },
+                },
+                {
+                    .depthStencil = {
+                        .depth = 1.0f,
+                        .stencil = 0,
+                    },
                 },
             },
         };
