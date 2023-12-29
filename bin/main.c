@@ -4,6 +4,9 @@
 #include <vulkan/vulkan.h>
 #include <SDL2/SDL_vulkan.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb/stb_image.h>
+
 static int32_t max_ticks = 60;
 static double ns = 0;
 
@@ -128,6 +131,7 @@ typedef float mat4[4][4];
 typedef struct vertex {
     Vect2 pos;
     Vect4 color;
+    Vect2 tex_coord;
 } Vertex;
 
 typedef struct CameraBuffer {
@@ -778,7 +782,7 @@ int main(void) {
             .stride = sizeof(Vertex),
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
         },
-        .vertexAttributeDescriptionCount = 2,
+        .vertexAttributeDescriptionCount = 3,
         .pVertexAttributeDescriptions = (VkVertexInputAttributeDescription[]) {
             {
                 .binding = 0,
@@ -791,6 +795,12 @@ int main(void) {
                 .location = 1,
                 .format = VK_FORMAT_R32G32B32A32_SFLOAT,
                 .offset = offsetof(Vertex, color),
+            },
+            {
+                .binding = 0,
+                .location = 2,
+                .format = VK_FORMAT_R32G32_SFLOAT,
+                .offset = offsetof(Vertex, tex_coord),
             },
         },
     };
@@ -878,13 +888,22 @@ int main(void) {
     // Create Descriptor Set
     VkDescriptorSetLayoutCreateInfo camera_descriptor_set_create_info = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 1,
-        .pBindings = &(VkDescriptorSetLayoutBinding) {
-            .binding = 0,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-            .pImmutableSamplers = NULL,
+        .bindingCount = 2,
+        .pBindings = (VkDescriptorSetLayoutBinding[]) {
+            {
+                .binding = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+                .pImmutableSamplers = NULL,
+            },
+            {
+                .binding = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .pImmutableSamplers = NULL,
+            },
         },
     };
 
@@ -905,10 +924,16 @@ int main(void) {
     // Create Descriptor pool
     VkDescriptorPoolCreateInfo descriptor_pool_create_info = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .poolSizeCount = 1,
-        .pPoolSizes = &(VkDescriptorPoolSize) {
-            .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = 1,
+        .poolSizeCount = 2,
+        .pPoolSizes = (VkDescriptorPoolSize[]) {
+            {
+                .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+            },
+            {
+                .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+            },
         },
         .maxSets = 1,
     };
@@ -930,24 +955,6 @@ int main(void) {
 
     VkDescriptorSet vk_descriptor_sets;
     error = vkAllocateDescriptorSets(vk_device, &descriptor_set_allocate_info, &vk_descriptor_sets);
-
-    // Set up writes
-    VkWriteDescriptorSet write_descriptor_set = {
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .dstSet = vk_descriptor_sets,
-        .dstBinding = 0,
-        .dstArrayElement = 0,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-        .descriptorCount = 1,
-        .pBufferInfo = &(VkDescriptorBufferInfo) {
-            .buffer = camera_data_buffer,
-            .offset = 0,
-            .range = sizeof(CameraBuffer),
-        },
-        .pImageInfo = NULL,
-        .pTexelBufferView = NULL,
-    };
-    vkUpdateDescriptorSets(vk_device, 1, &write_descriptor_set, 0, NULL);
 
     // Create the Pipeline layout
     VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
@@ -1115,13 +1122,286 @@ int main(void) {
         goto vk_command_buffer;
     }
 
+    // Load texture
+    int texture_width = 0;
+    int texture_height = 0;
+    int texture_channels = 0;
+
+    char image_path[256];
+    sprintf(image_path, "%s%s", base_path, "resources/test_image.jpg");
+    stbi_uc* pixels = stbi_load(image_path, &texture_width, &texture_height, &texture_channels, STBI_rgb_alpha);
+    if (!pixels) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed load test image!", NULL);
+        exit(0);
+    }
+    VkDeviceSize image_size = (uint64_t)texture_width * (uint64_t)texture_height * 4;
+
+    VkBuffer image_staging_buffer;
+    VkDeviceMemory image_staging_buffer_memory;
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &image_staging_buffer, &image_staging_buffer_memory);
+
+    void *image_data;
+    vkMapMemory(vk_device, image_staging_buffer_memory, 0, image_size, 0, &image_data);
+    memcpy(image_data, pixels, image_size);
+    vkUnmapMemory(vk_device, image_staging_buffer_memory);
+
+    stbi_image_free(pixels);
+
+    VkImageCreateInfo image_create_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .extent.width = (uint32_t)texture_width,
+        .extent.height = (uint32_t)texture_height,
+        .extent.depth = 1,
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .format = VK_FORMAT_R8G8B8A8_SRGB,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .flags = 0,
+    };
+
+    VkImage vk_image;
+    error = vkCreateImage(vk_device, &image_create_info, NULL, &vk_image);
+    if (error != VK_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create image!", NULL);
+        exit(0);
+    }
+
+    VkMemoryRequirements image_memory_requirements;
+    vkGetImageMemoryRequirements(vk_device, vk_image, &image_memory_requirements);
+
+    VkPhysicalDeviceMemoryProperties image_vk_memory_properties;
+    vkGetPhysicalDeviceMemoryProperties(kv_physical_devices[device_idx], &image_vk_memory_properties);
+
+    uint32_t image_memory_type_idx = 0;
+    uint32_t image_prop = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    bool found = false;
+    for (uint32_t i = 0; i < image_vk_memory_properties.memoryTypeCount; i++) {
+        if ((image_memory_requirements.memoryTypeBits & (1 << i)) && (image_vk_memory_properties.memoryTypes[i].propertyFlags & image_prop) == image_prop) {
+            found = true;
+            image_memory_type_idx = i;
+            break;
+        }
+    }
+    if (!found) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to find valid memory type!", NULL);
+        exit(0);
+    }
+
+    VkMemoryAllocateInfo image_alloc_info = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = image_memory_requirements.size,
+        .memoryTypeIndex = image_memory_type_idx,
+    };
+
+    VkDeviceMemory vk_image_memory;
+    if (vkAllocateMemory(vk_device, &image_alloc_info, NULL, &vk_image_memory) != VK_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to allocate memory forimage!", NULL);
+        exit(0);
+    }
+    vkBindImageMemory(vk_device, vk_image, vk_image_memory, 0);
+
+    // Create Barrier
+    VkCommandBufferAllocateInfo image_cmd_buffer_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandPool = vk_command_pool,
+        .commandBufferCount = 1,
+    };
+
+    VkCommandBuffer image_cmd_buffer;
+    vkAllocateCommandBuffers(vk_device, &image_cmd_buffer_info, &image_cmd_buffer);
+
+    VkCommandBufferBeginInfo image_cmd_begin_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    vkBeginCommandBuffer(image_cmd_buffer, &image_cmd_begin_info);
+
+    VkImageMemoryBarrier image_mem_barrier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = vk_image,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+    };
+
+    vkCmdPipelineBarrier(image_cmd_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &image_mem_barrier);
+
+    vkEndCommandBuffer(image_cmd_buffer);
+
+    VkSubmitInfo image_submit_info = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &image_cmd_buffer,
+    };
+
+    vkQueueSubmit(vk_queue, 1, &image_submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(vk_queue);
+
+    vkFreeCommandBuffers(vk_device, vk_command_pool, 1, &image_cmd_buffer);
+
+    // Copy to Buffer
+    image_cmd_buffer_info = (VkCommandBufferAllocateInfo) {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandPool = vk_command_pool,
+        .commandBufferCount = 1,
+    };
+    vkAllocateCommandBuffers(vk_device, &image_cmd_buffer_info, &image_cmd_buffer);
+
+    image_cmd_begin_info = (VkCommandBufferBeginInfo) {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    vkBeginCommandBuffer(image_cmd_buffer, &image_cmd_begin_info);
+
+    VkBufferImageCopy image_buffer_copy ={
+        .bufferOffset = 0,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+
+        .imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .imageSubresource.mipLevel = 0,
+        .imageSubresource.baseArrayLayer = 0,
+        .imageSubresource.layerCount = 1,
+
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {
+            (uint32_t)texture_width,
+            (uint32_t)texture_height,
+            1
+        },
+    };
+    vkCmdCopyBufferToImage(image_cmd_buffer, image_staging_buffer, vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &image_buffer_copy);
+
+    vkEndCommandBuffer(image_cmd_buffer);
+
+    image_submit_info = (VkSubmitInfo) {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &image_cmd_buffer,
+    };
+
+    vkQueueSubmit(vk_queue, 1, &image_submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(vk_queue);
+
+    vkFreeCommandBuffers(vk_device, vk_command_pool, 1, &image_cmd_buffer);
+
+    // Create Barrier
+    image_cmd_buffer_info = (VkCommandBufferAllocateInfo) {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandPool = vk_command_pool,
+        .commandBufferCount = 1,
+    };
+    vkAllocateCommandBuffers(vk_device, &image_cmd_buffer_info, &image_cmd_buffer);
+
+    image_cmd_begin_info = (VkCommandBufferBeginInfo) {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    vkBeginCommandBuffer(image_cmd_buffer, &image_cmd_begin_info);
+
+    image_mem_barrier = (VkImageMemoryBarrier) {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = vk_image,
+        .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .subresourceRange.baseMipLevel =0,
+        .subresourceRange.levelCount = 1,
+        .subresourceRange.baseArrayLayer = 0,
+        .subresourceRange.layerCount = 1,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+    };
+
+    vkCmdPipelineBarrier(image_cmd_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL, 1, &image_mem_barrier);
+
+    vkEndCommandBuffer(image_cmd_buffer);
+
+    image_submit_info = (VkSubmitInfo){
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &image_cmd_buffer,
+    };
+
+    vkQueueSubmit(vk_queue, 1, &image_submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(vk_queue);
+
+    vkFreeCommandBuffers(vk_device, vk_command_pool, 1, &image_cmd_buffer);
+
+    // Create an ImageView for the image
+    VkImageViewCreateInfo image_image_view_create_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = vk_image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = VK_FORMAT_R8G8B8A8_SRGB,
+        .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+        .subresourceRange.baseMipLevel = 0,
+        .subresourceRange.levelCount = 1,
+        .subresourceRange.baseArrayLayer = 0,
+        .subresourceRange.layerCount = 1,
+    };
+
+    VkImageView image_image_view;
+    error = vkCreateImageView(vk_device, &image_image_view_create_info, NULL, &image_image_view);
+    if (error != VK_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create image image view!", NULL);
+        exit(0);
+    }
+
+    // Create image sampler
+    VkSamplerCreateInfo image_sampler_create_info = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .anisotropyEnable = VK_TRUE,
+        .maxAnisotropy = device_properties.limits.maxSamplerAnisotropy,
+        .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+        .unnormalizedCoordinates = VK_FALSE,
+        .compareEnable = VK_FALSE,
+        .compareOp = VK_COMPARE_OP_ALWAYS,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .mipLodBias = 0.0f,
+        .minLod = 0.0f,
+        .maxLod = 0.0f,
+    };
+
+    VkSampler image_sampler;
+    error = vkCreateSampler(vk_device, &image_sampler_create_info, NULL, &image_sampler);
+    if (error != VK_SUCCESS) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create image samapler!", NULL);
+        exit(0);
+    }
+
     // Load vertex data
     uint32_t total_vertex_count = 4;
     Vertex traingle_vertex_data[] = {
-        {{-0.5, -0.5},{ {1.0}, {0.0}, {0.0}, {1.0}}},
-        {{0.5, -0.5}, { {0.0}, {1.0}, {0.0}, {1.0}}},
-        {{0.5, 0.5},  { {0.0}, {0.0}, {1.0}, {1.0}}},
-        {{-0.5, 0.5}, { {0.0}, {1.0}, {0.0}, {1.0}}},
+        {{-0.5, -0.5},{ {1.0}, {0.0}, {0.0}, {1.0} }, {0, 1}},
+        {{0.5, -0.5}, { {0.0}, {1.0}, {0.0}, {1.0} }, {1, 1}},
+        {{0.5, 0.5},  { {0.0}, {0.0}, {1.0}, {1.0} }, {1, 0}},
+        {{-0.5, 0.5}, { {0.0}, {1.0}, {0.0}, {1.0} }, {0, 0}},
     };
 
     // Staging
@@ -1235,6 +1515,40 @@ int main(void) {
 
     vkDestroyBuffer(vk_device, src_vk_index_buffer, NULL);
     vkFreeMemory(vk_device, src_index_buffer_memory, NULL);
+
+    // Set up writes
+    VkWriteDescriptorSet write_descriptor_set = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = vk_descriptor_sets,
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .pBufferInfo = &(VkDescriptorBufferInfo) {
+            .buffer = camera_data_buffer,
+            .offset = 0,
+            .range = sizeof(CameraBuffer),
+        },
+        .pImageInfo = NULL,
+        .pTexelBufferView = NULL,
+    };
+
+    VkWriteDescriptorSet write_descriptor_set_image = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = vk_descriptor_sets,
+        .dstBinding = 1,
+        .dstArrayElement = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .pImageInfo = &(VkDescriptorImageInfo) {
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .imageView = image_image_view,
+            .sampler = image_sampler,
+        },
+        .pBufferInfo = NULL,
+        .pTexelBufferView = NULL,
+    };
+    vkUpdateDescriptorSets(vk_device, 2, (VkWriteDescriptorSet[]){write_descriptor_set, write_descriptor_set_image}, 0, NULL);
 
     // Main loop
     SDL_Event event;
