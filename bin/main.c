@@ -1,19 +1,23 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 #include <unistd.h>
 #include <math.h>
 #include <SDL2/SDL.h>
 #include <vulkan/vulkan.h>
 #include <SDL2/SDL_vulkan.h>
 
-#define TINYOBJ_LOADER_C_IMPLEMENTATION
-#include "thirdparty/tinyobj_loader_c/tinyobj_loader_c.h"
+#include "src/error/error.h"
+#include "src/io/io.h"
+
+#include "src/camera.h"
+#include "src/io/memory.h"
+#include "src/data_structures/hash_map.h"
+#include "src/data_structures/vector.h"
+#include "src/math/vectors.h"
+#include "src/math/matrices.h"
+#include "src/math/angles.h"
+#include "src/surface.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
@@ -26,37 +30,6 @@ static int32_t frames = 0;
 
 static uint32_t window_width = 800;
 static uint32_t window_height = 600;
-
-char *read_file(const char *p_path, size_t *r_file_size) {
-    FILE *file = fopen(p_path, "rb");
-    if (!file) {
-        return NULL;
-    }
-
-    fseek(file, 0, SEEK_END);
-    size_t file_size = (size_t)ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    char *buffer = malloc(file_size + 1);
-    if (!buffer) {
-        fclose(file);
-        return NULL;
-    }
-    fread(buffer, file_size, 1, file);
-    fclose(file);
-
-    *r_file_size = file_size;
-
-    /*printf("%s\n", p_path);
-
-    for (size_t i = 0; i < file_size; i++) {
-        printf("0x%x ", buffer[i]);
-        if (i != 0 && (i % 5) == 0) {
-            printf("\n");
-        }
-    }*/
-    return buffer;
-}
 
 void create_vkbuffer(VkDevice p_device, VkPhysicalDevice p_physical_device, VkDeviceSize p_size, VkBufferUsageFlags p_usage, VkMemoryPropertyFlags p_properties, VkBuffer *p_buffer, VkDeviceMemory *p_buffer_memory) {
     VkBufferCreateInfo buffer_crreate_info = {
@@ -107,362 +80,20 @@ void create_vkbuffer(VkDevice p_device, VkPhysicalDevice p_physical_device, VkDe
     vkBindBufferMemory(p_device, *p_buffer, *p_buffer_memory, 0);
 }
 
-typedef struct vect2 {
-    float x;
-    float y;
-} Vect2;
-
-typedef struct vect3 {
-    float x;
-    float y;
-    float z;
-} Vect3;
-
-typedef struct vect4 {
-    union {
-        float r;
-        float x;
-    };
-    union {
-        float g;
-        float y;
-    };
-    union {
-        float b;
-        float z;
-    };
-    union {
-        float a;
-        float w;
-    };
-} Vect4;
-
-typedef float mat4[4][4];
-
-typedef struct vertex {
-    Vect3 pos;
-    Vect4 color;
-    Vect2 tex_coord;
-} Vertex;
-
 typedef struct CameraBuffer {
-    mat4 model;
-    mat4 view;
-    mat4 proj;
+    Mat4 model;
+    Mat4 view;
+    Mat4 proj;
 } CameraBuffer;
 
-Vect3 vect3_normalise(Vect3 a) {
-    float v = (float)sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
-    return (Vect3) {
-        a.x / v,
-        a.y / v,
-        a.z / v
-    };
-}
-
-// Need to negate?
-float vect3_dot(Vect3 a, Vect3 b) {
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-Vect3 vect3_cross(Vect3 a, Vect3 b) {
-    return (Vect3) {
-        a.y * b.z - a.z * b.y,
-        a.z * b.x - a.x * b.z,
-        a.x * b.y - a.y * b.x
-    };
-}
-
-Vect3 vect3_add(Vect3 a, Vect3 b) {
-    return (Vect3) {
-        a.x + b.x,
-        a.y + b.y,
-        a.z + b.z
-    };
-}
-
-Vect3 vect3_sub(Vect3 a, Vect3 b) {
-    return (Vect3) {
-        a.x - b.x,
-        a.y - b.y,
-        a.z - b.z
-    };
-}
-
-Vect3 vect3_multi(Vect3 a, float b) {
-    return (Vect3) {
-        a.x * b,
-        a.y * b,
-        a.z * b
-    };
-}
-
-Vect4 eular_to_quant(float xRads, float yRads, float zRads) {
-    float c1 = (float)cos(xRads);
-    float s1 = (float)sin(xRads);
-    float c2 = (float)cos(yRads);
-    float s2 = (float)sin(yRads);
-    float c3 = (float)cos(zRads);
-    float s3 = (float)sin(zRads);
-    float w  = (float)sqrt(1.0 + c1 * c2 + c1*c3 - s1 * s2 * s3 + c2*c3) / 2.0f;
-    float w4 = (float)(4.0 * w);
-
-    return (Vect4) {
-        .x = (c2 * s3 + c1 * s3 + s1 * s2 * c3) / w4,
-        .y = (s1 * c2 + s1 * c3 + c1 * s2 * s3) / w4,
-        .z = (-s1 * s3 + c1 * s2 * c3 +s2) / w4,
-        .w = w,
-    };
-}
-
-void mat4_rotate(mat4 mat, float rads, Vect3 a) {
-    float c = (float)cos(rads);
-    float s = (float)sin(rads);
-
-    Vect3 axis = vect3_normalise(a);
-    Vect3 temp = {(1 - c) * axis.x, (1 - c) * axis.y, (1 - c) * axis.z };
-
-    mat4 rot_mtx = {
-        {c + temp.x * axis.x, temp.x * axis.y + s * axis.z, temp.x * axis.z - s * axis.y, 0},
-        {temp.y * axis.x - s * axis.z, c + temp.y * axis.y, temp.y * axis.z + s * axis.x, 0},
-        {temp.z * axis.x + s * axis.y, temp.z * axis.y - s * axis.x, c + temp.z * axis.z, 0},
-        {0, 0, 0, 1},
-    };
-
-    mat4 ret_mtx;
-    for(int i = 0; i < 4; i++) {
-        for(int j = 0; j < 4; j++) {
-            float num = 0;
-            for(int k = 0; k < 4 ; k++) {
-                num += mat[i][k] * rot_mtx[k][j];
-            }
-            ret_mtx[i][j]=num;
-        }
-    }
-
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++) {
-            mat[i][j] = ret_mtx[i][j];
-        }
-    }
-}
-
-//    eye: position of camera in world space
-// center: where you want to look at, in world space
-//     up: Where is up
-void mat4_look_at(mat4 mat, Vect3 eye, Vect3 center, Vect3 up) {
-    Vect3 f = vect3_normalise(vect3_sub(center, eye));
-    Vect3 s = vect3_normalise(vect3_cross(up, f));
-    Vect3 u = vect3_cross(f, s);
-
-    mat[0][0] = s.x;
-    mat[1][0] = s.y;
-    mat[2][0] = s.z;
-
-    mat[0][1] = u.x;
-    mat[1][1] = u.y;
-    mat[2][1] = u.z;
-
-    mat[0][2] = f.x;
-    mat[1][2] = f.y;
-    mat[2][2] = f.z;
-
-    mat[3][0] = vect3_dot(s, eye);
-    mat[3][1] = vect3_dot(u, eye);
-    mat[3][2] = vect3_dot(f, eye);
-}
-
-void mat4_perspective(mat4 mat, float angle, float aspect, float znear, float zfar) {
-    float tan_half_angle = (float)tan(angle / 2);
-
-    mat[0][0] = 1 / (aspect * tan_half_angle);
-    mat[1][1] = 1 / tan_half_angle;
-    mat[2][2] = -(zfar + znear) / (zfar - znear);
-    mat[2][3] = -1;
-    mat[3][2] = -(2 * zfar * znear) / (zfar - znear);
-}
-
-void mat4_transform(mat4 mat, Vect3 v) {
-    mat4 ret_mtx;
-     for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++) {
-            ret_mtx[i][j] = mat[i][j];
-        }
-    }
-
-    ret_mtx[3][0] = mat[0][0] * v.x + mat[1][0] * v.y + mat[2][0] * v.z + mat[3][0];
-    ret_mtx[3][1] = mat[0][1] * v.x + mat[1][1] * v.y + mat[2][1] * v.z + mat[3][1];
-    ret_mtx[3][2] = mat[0][2] * v.x + mat[1][2] * v.y + mat[2][2] * v.z + mat[3][2];
-    ret_mtx[3][3] = mat[0][3] * v.x + mat[1][3] * v.y + mat[2][3] * v.z + mat[3][3];
-
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++) {
-            mat[i][j] = ret_mtx[i][j];
-        }
-    }
-}
-
-void mat4_multi(mat4 mat, mat4 b) {
-    mat4 ret_mtx;
-        for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++) {
-            ret_mtx[i][j] = mat[i][j];
-        }
-    }
-
-    for (int i = 0; i < 4; i++) {
-        ret_mtx[i][0] = (mat[i][0] * b[0][0]) +
-                        (mat[i][1] * b[1][0]) +
-                        (mat[i][2] * b[2][0]) +
-                        (mat[i][3] * b[3][0]);
-
-        ret_mtx[i][1] = (mat[i][0] * b[0][1]) +
-                        (mat[i][1] * b[1][1]) +
-                        (mat[i][2] * b[2][1]) +
-                        (mat[i][3] * b[3][1]);
-
-        ret_mtx[i][2] = (mat[i][0] * b[0][2]) +
-                        (mat[i][1] * b[1][2]) +
-                        (mat[i][2] * b[2][2]) +
-                        (mat[i][3] * b[3][2]);
-
-        ret_mtx[i][3] = (mat[i][0] * b[0][3]) +
-                        (mat[i][1] * b[1][3]) +
-                        (mat[i][2] * b[2][3]) +
-                        (mat[i][3] * b[3][3]);
-    }
-
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++) {
-            mat[i][j] = ret_mtx[i][j];
-        }
-    }
-}
-
-
-float degtorad(float degrees) {
-    return (float)(degrees * 3.1415) / 180;
-}
-
-float radtodeg(float rads) {
-    return (float)(rads * 180) / 3.1415f;
-}
-
-static char* mmap_file(size_t* len, const char* filename) {
-  struct stat sb;
-  char* p;
-  int fd;
-
-  fd = open(filename, O_RDONLY);
-  if (fd == -1) {
-    perror("open");
-    return NULL;
-  }
-
-  if (fstat(fd, &sb) == -1) {
-    perror("fstat");
-    return NULL;
-  }
-
-  if (!S_ISREG(sb.st_mode)) {
-    fprintf(stderr, "%s is not a file\n", filename);
-    return NULL;
-  }
-
-  p = (char*)mmap(0, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
-
-  if (p == MAP_FAILED) {
-    perror("mmap");
-    return NULL;
-  }
-
-  if (close(fd) == -1) {
-    perror("close");
-    return NULL;
-  }
-
-  (*len) = sb.st_size;
-
-  return p;
-}
-
-static void get_file_data(void* ctx, const char* filename, const int is_mtl,
-                          const char* obj_filename, char** data, size_t* len) {
-  // NOTE: If you allocate the buffer with malloc(),
-  // You can define your own memory management struct and pass it through `ctx`
-  // to store the pointer and free memories at clean up stage(when you quit an
-  // app)
-  // This example uses mmap(), so no free() required.
-  (void)ctx;
-
-    printf("%s %i", obj_filename, is_mtl);
-  if (!filename) {
-    fprintf(stderr, "null filename\n");
-    (*data) = NULL;
-    (*len) = 0;
-    return;
-  }
-
-  size_t data_len = 0;
-
-  *data = mmap_file(&data_len, filename);
-  (*len) = data_len;
-}
-
 int main(void) {
-
     // Load model data
-    char *base_path = SDL_GetBasePath();
+    char model_path[512];
+    get_resource_path(model_path, "resources/viking_room.obj");
 
-    char model_path[256];
-    sprintf(model_path, "%s%s", base_path, "resources/viking_room.obj");
-
-    tinyobj_attrib_t attrib;
-    tinyobj_shape_t* shapes = NULL;
-    size_t num_shapes;
-    tinyobj_material_t* materials = NULL;
-    size_t num_materials;
-
-    unsigned int flags = TINYOBJ_FLAG_TRIANGULATE;
-    int ret = tinyobj_parse_obj(&attrib, &shapes, &num_shapes, &materials, &num_materials, model_path, get_file_data, NULL, flags);
-    if (ret != TINYOBJ_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Tiny OBJ", "FATAL: Failed to load model!", NULL);
-        return -1;
-    }
-
-    Vertex *vertexes = malloc(sizeof(Vertex) * attrib.num_faces);
-    if (!vertexes) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "vk renderer", "FATAL: Failed to allocate memory for model!", NULL);
-        return -1;
-    }
-
-    uint32_t total_index_count = 0;
-    uint32_t *indices = malloc(sizeof(uint32_t) * attrib.num_faces);
-
-    uint32_t total_vertex_count = 0;
-    for (unsigned int i = 0; i < attrib.num_faces; i++) {
-        total_index_count++;
-        indices[i] = i;
-
-        total_vertex_count++;
-        vertexes[i] = (Vertex) {
-            .pos = {
-                attrib.vertices[3 * attrib.faces[i].v_idx + 0],
-                attrib.vertices[3 * attrib.faces[i].v_idx + 1],
-                attrib.vertices[3 * attrib.faces[i].v_idx + 2],
-            },
-            .color = {
-                {1.0f - i % 2},
-                {1.0f - i % 3},
-                {1.0f},
-                {1.0f},
-            },
-            .tex_coord = {
-                attrib.texcoords[2 * attrib.faces[i].vt_idx + 0],
-                1.0f - attrib.texcoords[2 * attrib.faces[i].vt_idx + 1]
-            }
-        };
-    }
+    Vector vertexes;
+    Vector indices;
+    load_obj(model_path, &vertexes, &indices);
 
     // Init SDL
     if (SDL_Init(SDL_INIT_EVERYTHING) != 0) {
@@ -489,10 +120,7 @@ int main(void) {
     }
 
     VkInstance vk_instance = VK_NULL_HANDLE;
-    const char **extension_names = malloc(sizeof(char*) * extension_count);
-    if (!extension_names) {
-        goto cleanup;
-    }
+    const char **extension_names = mmalloc(sizeof(char*) * extension_count);
     if (SDL_Vulkan_GetInstanceExtensions(window, &extension_count, extension_names) == SDL_FALSE) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "SDL 2", "FATAL: Could not get window extensions!", NULL);
         goto cleanup_instance;
@@ -541,10 +169,7 @@ int main(void) {
         goto cleanup_surface;
     }
 
-    VkPhysicalDevice *kv_physical_devices = malloc(sizeof(VkPhysicalDevice) * device_count);
-    if (!extension_names) {
-        goto cleanup_surface;
-    }
+    VkPhysicalDevice *kv_physical_devices = mmalloc(sizeof(VkPhysicalDevice) * device_count);
     error = vkEnumeratePhysicalDevices(vk_instance, &device_count, kv_physical_devices);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to get physical devices!", NULL);
@@ -587,13 +212,10 @@ int main(void) {
             continue;
         }
 
-        VkQueueFamilyProperties *queue_families  = malloc(sizeof(VkQueueFamilyProperties) * queue_family_count);
-        if (!queue_families) {
-            continue;
-        }
+        VkQueueFamilyProperties *queue_families  = mmalloc(sizeof(VkQueueFamilyProperties) * queue_family_count);
         vkGetPhysicalDeviceQueueFamilyProperties(kv_physical_devices[i], &queue_family_count, queue_families);
         if (error != VK_SUCCESS) {
-            free(queue_families);
+            mfree(queue_families);
             continue;
         }
 
@@ -605,7 +227,7 @@ int main(void) {
                 break;
             }
         }
-        free(queue_families);
+        mfree(queue_families);
         if (!found) {
             continue;
         }
@@ -623,13 +245,10 @@ int main(void) {
         if (device_extension_count == 0) {
             continue;
         }
-        VkExtensionProperties *device_extention_properties  = malloc(sizeof(VkExtensionProperties) * device_extension_count);
-        if (!device_extention_properties) {
-            continue;
-        }
+        VkExtensionProperties *device_extention_properties  = mmalloc(sizeof(VkExtensionProperties) * device_extension_count);
         vkEnumerateDeviceExtensionProperties(kv_physical_devices[i], NULL, &device_extension_count, device_extention_properties);
         if (error != VK_SUCCESS) {
-            free(device_extention_properties);
+            mfree(device_extention_properties);
             continue;
         }
 
@@ -640,7 +259,7 @@ int main(void) {
                 break;
             }
         }
-        free(device_extention_properties);
+        mfree(device_extention_properties);
         if (!found) {
             continue;
         }
@@ -677,10 +296,10 @@ int main(void) {
         if (device_surface_format_count == 0) {
             continue;
         }
-        VkSurfaceFormatKHR *device_surface_formats = malloc(sizeof(VkSurfaceFormatKHR) * device_surface_format_count);
+        VkSurfaceFormatKHR *device_surface_formats = mmalloc(sizeof(VkSurfaceFormatKHR) * device_surface_format_count);
         error = vkGetPhysicalDeviceSurfaceFormatsKHR(kv_physical_devices[i], vk_surface, &device_surface_format_count, device_surface_formats);
         if (error != VK_SUCCESS) {
-            free(device_surface_formats);
+            mfree(device_surface_formats);
             continue;
         }
 
@@ -691,7 +310,7 @@ int main(void) {
                 break;
             }
         }
-        free(device_surface_formats);
+        mfree(device_surface_formats);
 
         uint32_t device_surface_present_modes_count = 0;
         error = vkGetPhysicalDeviceSurfacePresentModesKHR(kv_physical_devices[i], vk_surface, &device_surface_present_modes_count, NULL);
@@ -701,10 +320,10 @@ int main(void) {
         if (device_surface_format_count == 0) {
             continue;
         }
-        VkPresentModeKHR *device_presents_modes = malloc(sizeof(VkPresentModeKHR) * device_surface_present_modes_count);
+        VkPresentModeKHR *device_presents_modes = mmalloc(sizeof(VkPresentModeKHR) * device_surface_present_modes_count);
         error = vkGetPhysicalDeviceSurfacePresentModesKHR(kv_physical_devices[i], vk_surface, &device_surface_present_modes_count, device_presents_modes);
         if (error != VK_SUCCESS) {
-            free(device_presents_modes);
+            mfree(device_presents_modes);
             continue;
         }
         device_present_mode = device_presents_modes[0];
@@ -715,7 +334,7 @@ int main(void) {
             }
         }
 
-        free(device_presents_modes);
+        mfree(device_presents_modes);
 
         // Check for depth format
         found = false;
@@ -816,23 +435,15 @@ int main(void) {
         goto cleanup_swapchain;
     }
 
-    VkImage *vk_images = malloc(sizeof(VkImage) * vk_swapchain_image_count);
-    if (!vk_images) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to allocate memory for images!", NULL);
-        goto cleanup_swapchain;
-    }
+    VkImage *vk_images = mmalloc(sizeof(VkImage) * vk_swapchain_image_count);
     error = vkGetSwapchainImagesKHR(vk_device, vk_swapchain, &vk_swapchain_image_count, vk_images);
     if (error != VK_SUCCESS) {
-        free(vk_images);
+        mfree(vk_images);
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to get swapchain images!", NULL);
         goto cleanup_swapchain;
     }
 
-    VkImageView *vk_image_views = malloc(sizeof(VkImageView) * vk_swapchain_image_count);
-    if (!vk_image_views) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to allocate memory for image views!", NULL);
-        goto cleanup_images;
-    }
+    VkImageView *vk_image_views = mmalloc(sizeof(VkImageView) * vk_swapchain_image_count);
 
     for (uint32_t i = 0; i < vk_swapchain_image_count; i++) {
         VkImageViewCreateInfo vk_image_view_create_info = {
@@ -862,9 +473,8 @@ int main(void) {
     }
 
     // Load and Create shaders
-    char shader_path[256];
-
-    sprintf(shader_path, "%s%s", base_path, "shaders/vert_shader.spv");
+    char shader_path[512];
+    get_resource_path(shader_path, "shaders/vert_shader.spv");
     size_t vert_shader_len = {};
     char *vert_shader = read_file(shader_path, &vert_shader_len);
     if (!vert_shader) {
@@ -885,7 +495,7 @@ int main(void) {
         goto cleanup_vert;
     }
 
-    sprintf(shader_path, "%s%s", base_path, "shaders/frag_shader.spv");
+    get_resource_path(shader_path, "shaders/frag_shader.spv");
     size_t frag_shader_len = {};
     char *frag_shader = read_file(shader_path, &frag_shader_len);
     if (!frag_shader) {
@@ -1300,11 +910,7 @@ int main(void) {
     }
 
     // Create FromeBuffers
-    VkFramebuffer *vk_frame_buffers = malloc(sizeof(VkFramebuffer) * device_image_count);
-    if (!vk_frame_buffers) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to allocate memory for frame buffers!", NULL);
-        goto vk_frame_buffers;
-    }
+    VkFramebuffer *vk_frame_buffers = mmalloc(sizeof(VkFramebuffer) * device_image_count);
 
     for (uint32_t i = 0; i < device_image_count; i ++) {
         VkFramebufferCreateInfo frame_buffer_create_info = {
@@ -1384,8 +990,8 @@ int main(void) {
     int texture_height = 0;
     int texture_channels = 0;
 
-    char image_path[256];
-    sprintf(image_path, "%s%s", base_path, "resources/viking_room.png");
+    char image_path[512];
+    get_resource_path(image_path, "resources/viking_room.png");
     stbi_uc* pixels = stbi_load(image_path, &texture_width, &texture_height, &texture_channels, STBI_rgb_alpha);
     if (!pixels) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed load test image!", NULL);
@@ -1669,17 +1275,17 @@ int main(void) {
     // Staging
     VkBuffer src_vk_vertex_buffer;
     VkDeviceMemory src_vertext_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(Vertex) * total_vertex_count, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_vertex_buffer, &src_vertext_buffer_memory);
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(Vertex) * vertexes.size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_vertex_buffer, &src_vertext_buffer_memory);
 
     void *data;
-    vkMapMemory(vk_device, src_vertext_buffer_memory, 0, sizeof(Vertex) * total_vertex_count, 0, &data);
-    memcpy(data, vertexes, sizeof(Vertex) * total_vertex_count);
+    vkMapMemory(vk_device, src_vertext_buffer_memory, 0, sizeof(Vertex) * vertexes.size, 0, &data);
+    memcpy(data, vertexes.data, sizeof(Vertex) * vertexes.size);
     vkUnmapMemory(vk_device, src_vertext_buffer_memory);
 
     // Dest
     VkBuffer vk_vertex_buffer;
     VkDeviceMemory vertext_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(Vertex) * total_vertex_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_vertex_buffer, &vertext_buffer_memory);
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(Vertex) * vertexes.size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_vertex_buffer, &vertext_buffer_memory);
 
     // Copy Src to dest
     // Can move to seperate command pool / buffer
@@ -1703,7 +1309,7 @@ int main(void) {
     VkBufferCopy buffer_copy_cmd = {
         .srcOffset = 0,
         .dstOffset = 0,
-        .size = sizeof(Vertex) * total_vertex_count,
+        .size = sizeof(Vertex) * vertexes.size,
     };
     vkCmdCopyBuffer(copy_cmd_buffer, src_vk_vertex_buffer, vk_vertex_buffer, 1, &buffer_copy_cmd);
 
@@ -1730,16 +1336,16 @@ int main(void) {
     // Staging
     VkBuffer src_vk_index_buffer;
     VkDeviceMemory src_index_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint32_t) * total_index_count, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_index_buffer, &src_index_buffer_memory);
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint32_t) * indices.size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_index_buffer, &src_index_buffer_memory);
 
-    vkMapMemory(vk_device, src_index_buffer_memory, 0, sizeof(uint32_t) * total_index_count, 0, &data);
-    memcpy(data, indices, sizeof(uint32_t) * total_index_count);
+    vkMapMemory(vk_device, src_index_buffer_memory, 0, sizeof(uint32_t) * indices.size, 0, &data);
+    memcpy(data, indices.data, sizeof(uint32_t) * indices.size);
     vkUnmapMemory(vk_device, src_index_buffer_memory);
 
     // Dest
     VkBuffer vk_index_buffer;
     VkDeviceMemory index_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint32_t) * total_index_count, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_index_buffer, &index_buffer_memory);
+    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint32_t) * indices.size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_index_buffer, &index_buffer_memory);
 
     // Copy Src to dest
     // Can move to seperate command pool / buffer
@@ -1762,7 +1368,7 @@ int main(void) {
     VkBufferCopy index_buffer_copy_cmd = {
         .srcOffset = 0,
         .dstOffset = 0,
-        .size = sizeof(uint32_t) * total_index_count,
+        .size = sizeof(uint32_t) * indices.size,
     };
     vkCmdCopyBuffer(copy_cmd_buffer, src_vk_index_buffer, vk_index_buffer, 1, &index_buffer_copy_cmd);
 
@@ -1824,11 +1430,10 @@ int main(void) {
     int32_t tick = 0;
     uptime = 0;
 
+    Camera camera;
+    camera_init(&camera);
+
     bool mouse_capture = false;
-    Vect3 camera_pos = {-2, 0, -2};
-    float pitch = 0;
-    float yaw = 45;
-    Vect3 camera_rot = {0.7f, 0.04f, 0.66f};
 
     float rot = 0;
     bool running = true;
@@ -1845,26 +1450,9 @@ int main(void) {
                     break;
                 }
 
-                if (event.type == SDL_MOUSEMOTION) {
-                    yaw += ((float)event.motion.xrel) * 0.1f;
-                    pitch += ((float)event.motion.yrel) * 0.1f;
-
-                    if(pitch > 75.0f) {
-                       pitch = 75.0f;
-                    }
-                    if(pitch < -50.0f) {
-                       pitch = -50.0f;
-                    }
-
-                    camera_rot.x = (float)cos(degtorad(yaw)) * (float)cos(degtorad(pitch));
-                    camera_rot.y = (float)sin(degtorad(pitch));
-                    camera_rot.z = (float)sin(degtorad(yaw)) * (float)cos(degtorad(pitch));
-                    camera_rot = vect3_normalise(camera_rot);
-                    if (mouse_capture) {
-                        SDL_WarpMouseInWindow(window, (int)(window_width / 2), (int)(window_height / 2));
-                    }
+                if (camera_event(&camera, event) && mouse_capture) {
+                    SDL_WarpMouseInWindow(window, (int)(window_width / 2), (int)(window_height / 2));
                 }
-
 
                 if (event.type == SDL_MOUSEBUTTONDOWN) {
                     mouse_capture = true;
@@ -1880,21 +1468,7 @@ int main(void) {
             }
 
             // Update
-            const Uint8 *keystates =  SDL_GetKeyboardState( NULL );
-            if (keystates[SDL_SCANCODE_W]) {
-                camera_pos = vect3_add(camera_pos, vect3_multi(camera_rot, 0.1f * (float)delta));
-            }
-            if (keystates[SDL_SCANCODE_S]) {
-                camera_pos = vect3_sub(camera_pos, vect3_multi(camera_rot, 0.1f * (float)delta));
-            }
-
-            if (keystates[SDL_SCANCODE_A]) {
-                camera_pos = vect3_sub(camera_pos, vect3_multi(vect3_normalise(vect3_cross(camera_rot, (Vect3){0, 1, 0})), 0.1f * (float)delta));
-            }
-
-            if (keystates[SDL_SCANCODE_D]) {
-                camera_pos = vect3_add(camera_pos, vect3_multi(vect3_normalise(vect3_cross(camera_rot, (Vect3){0, 1, 0})), 0.1f * (float)delta));
-            }
+            camera_physics_process(&camera, delta);
 
             tick++;
             delta--;
@@ -1933,8 +1507,7 @@ int main(void) {
         }
         mat4_rotate(camera_bufffer.model,  degtorad(90), (Vect3){-1, 0, 0});
 
-        Vect3 forward_vect = vect3_add(camera_pos, camera_rot);
-        mat4_look_at(camera_bufffer.view, camera_pos, forward_vect, (Vect3){0, 1, 0});
+        camera_get_bias(&camera, camera_bufffer.view);
 
         mat4_perspective(camera_bufffer.proj, degtorad(45), (float)device_extent2D.width / (float)device_extent2D.height, (float)0.1, (float)10.0);
         camera_bufffer.proj[1][1] *= -1;
@@ -2000,7 +1573,7 @@ int main(void) {
         vkCmdBindIndexBuffer(vk_command_buffer, vk_index_buffer, 0, VK_INDEX_TYPE_UINT32);
         vkCmdBindDescriptorSets(vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pipieline_layout, 0, 1, &vk_descriptor_sets, 0, NULL);
 
-        vkCmdDrawIndexed(vk_command_buffer, total_index_count, 1, 0, 0, 0);
+        vkCmdDrawIndexed(vk_command_buffer, indices.size, 1, 0, 0, 0);
 
         vkCmdEndRenderPass(vk_command_buffer);
         error = vkEndCommandBuffer(vk_command_buffer);
@@ -2069,10 +1642,9 @@ vk_command_pool:
     vkDestroyCommandPool(vk_device, vk_command_pool, NULL);
 vk_image_buffers:
     for (uint32_t i = 0; i < device_image_count; i ++) {
-        //free(vk_frame_buffers[i]);
+        //mfree(vk_frame_buffers[i]);
     }
-    free(vk_frame_buffers);
-vk_frame_buffers:
+    mfree(vk_frame_buffers);
     vkDestroyPipeline(vk_device, vk_graphics_pipeline, NULL);
 vk_graphics_pipeline:
     vkDestroyRenderPass(vk_device, vk_render_pass, NULL);
@@ -2081,32 +1653,31 @@ cleanup_renderpass:
 cleanup_pipeline:
     vkDestroyShaderModule(vk_device, frag_shader_module, NULL);
 cleanup_frag:
-    free(frag_shader);
+    mfree(frag_shader);
     vkDestroyShaderModule(vk_device, vert_shader_module, NULL);
 cleanup_vert:
-    free(vert_shader);
+    mfree(vert_shader);
 cleanup_imageviews:
     for (uint32_t i = 0; i < vk_swapchain_image_count; i++) {
         vkDestroyImageView(vk_device, vk_image_views[i], NULL);
     }
-    free(vk_image_views);
-cleanup_images:
+    mfree(vk_image_views);
     for (uint32_t i = 0; i < vk_swapchain_image_count; i++) {
         vkDestroyImage(vk_device, vk_images[i], NULL);
     }
-    free(vk_images);
+    mfree(vk_images);
 cleanup_swapchain:
     //vkDestroySwapchainKHR(vk_device, vk_swapchain, NULL);
 cleanup_virtual_device:
     vkDestroyDevice(vk_device, NULL);
 cleanup_phyical_devices:
-    free(kv_physical_devices);
+    mfree(kv_physical_devices);
 cleanup_surface:
     vkDestroySurfaceKHR(vk_instance, vk_surface, NULL);
     SDL_DestroyWindowSurface(window);
 cleanup_instance:
     vkDestroyInstance(vk_instance, NULL);
-    free(extension_names);
+    mfree(extension_names);
 cleanup:
     SDL_DestroyWindow(window);
     SDL_Vulkan_UnloadLibrary();

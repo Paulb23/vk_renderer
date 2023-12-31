@@ -5,6 +5,11 @@ Export('env');
 
 targets=[]
 
+env.add_sources(targets, "error/*.c")
+env.add_sources(targets, "data_structures/*.c")
+env.add_sources(targets, "io/*.c")
+env.add_sources(targets, "math/*.c")
 env.add_sources(targets, "*.c")
+env.add_sources(targets, "vulkan/*.c")
 
 env.libs+=env.Library('src', targets);
