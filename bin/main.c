@@ -9,6 +9,7 @@
 
 #include "src/error/error.h"
 #include "src/io/io.h"
+#include "src/vulkan/vk_window.h"
 
 #include "src/camera.h"
 #include "src/io/memory.h"
@@ -106,371 +107,8 @@ int main(void) {
         return -1;
     }
 
-    // Create Window
-    SDL_Window *window = SDL_CreateWindow("Toy Vulkan Renderer", 0, 0, 800, 600, SDL_WINDOW_VULKAN);
-
-    // Init Vulkan
-
-    // Create instance
-
-    unsigned int extension_count = 0;
-    if (SDL_Vulkan_GetInstanceExtensions(window, &extension_count, NULL) == SDL_FALSE) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "SDL 2", "FATAL: Could not get window extensions count!", NULL);
-        goto cleanup;
-    }
-
-    VkInstance vk_instance = VK_NULL_HANDLE;
-    const char **extension_names = mmalloc(sizeof(char*) * extension_count);
-    if (SDL_Vulkan_GetInstanceExtensions(window, &extension_count, extension_names) == SDL_FALSE) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "SDL 2", "FATAL: Could not get window extensions!", NULL);
-        goto cleanup_instance;
-    }
-
-    VkInstanceCreateInfo vk_instance_create_info = {
-        .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-        .pApplicationInfo = &(VkApplicationInfo) {
-            .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-            .pApplicationName = "vk_renderer",
-            .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
-            .pEngineName = "vk_renderer",
-            .engineVersion = VK_MAKE_API_VERSION(1, 1, 0, 0),
-            .apiVersion = VK_API_VERSION_1_0,
-        },
-        .enabledExtensionCount = extension_count,
-        .ppEnabledExtensionNames = extension_names,
-    };
-
-    VkResult error = vkCreateInstance(&vk_instance_create_info, NULL, &vk_instance);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Could not create Vulkan instance!", NULL);
-        printf("Error: %i\n", error);
-        goto cleanup_instance;
-    }
-
-    // Create Surface
-    VkSurfaceKHR vk_surface = {};
-    if (SDL_Vulkan_CreateSurface(window, vk_instance, &vk_surface) == SDL_FALSE) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create surface!", NULL);
-        goto cleanup_instance;
-    }
-
-    // Create phsical device
-
-    uint32_t device_count = 0;
-    error = vkEnumeratePhysicalDevices(vk_instance, &device_count, NULL);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to get number of physical devices!", NULL);
-        printf("Error: %i\n", error);
-        goto cleanup_surface;
-    }
-
-    if (device_count == 0) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to find device with Vulkan support!", NULL);
-        goto cleanup_surface;
-    }
-
-    VkPhysicalDevice *kv_physical_devices = mmalloc(sizeof(VkPhysicalDevice) * device_count);
-    error = vkEnumeratePhysicalDevices(vk_instance, &device_count, kv_physical_devices);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to get physical devices!", NULL);
-        goto cleanup_phyical_devices;
-    }
-
-    uint32_t device_idx = 0;
-    uint32_t device_score = 0;
-    uint32_t queue_family_idx = 0;
-
-    uint32_t device_image_count = 0;
-    VkPhysicalDeviceProperties device_properties = {};
-    VkPhysicalDeviceFeatures device_features = {};
-    VkSurfaceFormatKHR device_surface_format = {};
-    VkPresentModeKHR device_present_mode = {};
-    VkExtent2D device_extent2D = {};
-    VkFormat device_depth_format;
-    VkSurfaceTransformFlagBitsKHR device_pre_transform = {};
-    for (uint32_t i = 0; i < device_count; i++) {
-        uint32_t score = 0;
-
-        vkGetPhysicalDeviceProperties(kv_physical_devices[i], &device_properties);
-        vkGetPhysicalDeviceFeatures(kv_physical_devices[i], &device_features);
-
-        // Check device can draw geometry
-        if (!device_features.geometryShader) {
-            continue;
-        }
-
-        // Bonus points for dedicated GPU
-        score += device_properties.limits.maxImageDimension2D;
-        if (device_properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-            score += 1000;
-        }
-
-        // Check for and get graphics queue
-        uint32_t queue_family_count = 0;
-        vkGetPhysicalDeviceQueueFamilyProperties(kv_physical_devices[i], &queue_family_count, NULL);
-        if (queue_family_count == 0) {
-            continue;
-        }
-
-        VkQueueFamilyProperties *queue_families  = mmalloc(sizeof(VkQueueFamilyProperties) * queue_family_count);
-        vkGetPhysicalDeviceQueueFamilyProperties(kv_physical_devices[i], &queue_family_count, queue_families);
-        if (error != VK_SUCCESS) {
-            mfree(queue_families);
-            continue;
-        }
-
-        bool found = false;
-        for (uint32_t j = 0; j < queue_family_count; j++) {
-            if (queue_families[j].queueFlags > 0 && queue_families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-                queue_family_idx = j;
-                found = true;
-                break;
-            }
-        }
-        mfree(queue_families);
-        if (!found) {
-            continue;
-        }
-
-        // Check for surface support
-        VkBool32 has_surface_support = VK_FALSE;
-        vkGetPhysicalDeviceSurfaceSupportKHR(kv_physical_devices[i], queue_family_idx, vk_surface, &has_surface_support);
-        if (has_surface_support == VK_FALSE) {
-            continue;
-        }
-
-        // Check for swapchain extension support
-        uint32_t device_extension_count = 0;
-        vkEnumerateDeviceExtensionProperties(kv_physical_devices[i], NULL, &device_extension_count, NULL);
-        if (device_extension_count == 0) {
-            continue;
-        }
-        VkExtensionProperties *device_extention_properties  = mmalloc(sizeof(VkExtensionProperties) * device_extension_count);
-        vkEnumerateDeviceExtensionProperties(kv_physical_devices[i], NULL, &device_extension_count, device_extention_properties);
-        if (error != VK_SUCCESS) {
-            mfree(device_extention_properties);
-            continue;
-        }
-
-        found = false;
-        for (uint32_t j = 0; j < device_extension_count; j++) {
-            if (SDL_strncmp(device_extention_properties[j].extensionName, VK_KHR_SWAPCHAIN_EXTENSION_NAME, sizeof(VK_KHR_SWAPCHAIN_EXTENSION_NAME)) == 0) {
-                found = true;
-                break;
-            }
-        }
-        mfree(device_extention_properties);
-        if (!found) {
-            continue;
-        }
-
-        // Check surface capabilities
-        VkSurfaceCapabilitiesKHR device_surface_capabilities;
-        error = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(kv_physical_devices[i], vk_surface, &device_surface_capabilities);
-        if (error != VK_SUCCESS) {
-            continue;
-        }
-        if (device_surface_capabilities.currentExtent.width == UINT32_MAX) {
-            device_extent2D = device_surface_capabilities.currentExtent;
-        } else {
-            device_extent2D.height = window_height;
-            device_extent2D.width = window_width;
-
-            device_extent2D.height = SDL_clamp(device_extent2D.height, device_surface_capabilities.minImageExtent.height, device_surface_capabilities.maxImageExtent.height);
-            device_extent2D.width = SDL_clamp(device_extent2D.width, device_surface_capabilities.minImageExtent.width, device_surface_capabilities.maxImageExtent.width);
-        }
-        if (device_surface_capabilities.maxImageCount == 0) {
-            continue;
-        }
-        device_image_count = device_surface_capabilities.minImageCount + 1;
-        if (device_image_count > device_surface_capabilities.maxImageCount) {
-            device_image_count = device_surface_capabilities.maxImageCount;
-        }
-        device_pre_transform = device_surface_capabilities.currentTransform;
-
-        uint32_t device_surface_format_count = 0;
-        error = vkGetPhysicalDeviceSurfaceFormatsKHR(kv_physical_devices[i], vk_surface, &device_surface_format_count, NULL);
-        if (error != VK_SUCCESS) {
-            continue;
-        }
-        if (device_surface_format_count == 0) {
-            continue;
-        }
-        VkSurfaceFormatKHR *device_surface_formats = mmalloc(sizeof(VkSurfaceFormatKHR) * device_surface_format_count);
-        error = vkGetPhysicalDeviceSurfaceFormatsKHR(kv_physical_devices[i], vk_surface, &device_surface_format_count, device_surface_formats);
-        if (error != VK_SUCCESS) {
-            mfree(device_surface_formats);
-            continue;
-        }
-
-        device_surface_format = device_surface_formats[0];
-        for (uint32_t j = 0; j < device_surface_format_count; j++) {
-            if (device_surface_formats[j].format == VK_FORMAT_B8G8R8A8_SRGB && device_surface_formats[j].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-                device_surface_format = device_surface_formats[j];
-                break;
-            }
-        }
-        mfree(device_surface_formats);
-
-        uint32_t device_surface_present_modes_count = 0;
-        error = vkGetPhysicalDeviceSurfacePresentModesKHR(kv_physical_devices[i], vk_surface, &device_surface_present_modes_count, NULL);
-        if (error != VK_SUCCESS) {
-            continue;
-        }
-        if (device_surface_format_count == 0) {
-            continue;
-        }
-        VkPresentModeKHR *device_presents_modes = mmalloc(sizeof(VkPresentModeKHR) * device_surface_present_modes_count);
-        error = vkGetPhysicalDeviceSurfacePresentModesKHR(kv_physical_devices[i], vk_surface, &device_surface_present_modes_count, device_presents_modes);
-        if (error != VK_SUCCESS) {
-            mfree(device_presents_modes);
-            continue;
-        }
-        device_present_mode = device_presents_modes[0];
-        for (uint32_t j = 0; j < device_surface_present_modes_count; j++) {
-            if (device_presents_modes[j] == VK_PRESENT_MODE_FIFO_KHR) {
-                device_present_mode = device_presents_modes[j];
-                break;
-            }
-        }
-
-        mfree(device_presents_modes);
-
-        // Check for depth format
-        found = false;
-        VkImageTiling search_tiling = VK_IMAGE_TILING_OPTIMAL;
-        VkFormat search_formats[] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT};
-        VkFormatFeatureFlags search_features = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
-        for (int j = 0; j < 3; j++) {
-            VkFormatProperties props;
-            vkGetPhysicalDeviceFormatProperties(kv_physical_devices[i], search_formats[j], &props);
-
-            if (search_tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & search_features) == search_features) {
-                found = true;
-                device_depth_format = search_formats[j];
-                break;
-            }
-
-            if (search_tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & search_features) == search_features) {
-                found = true;
-                device_depth_format = search_formats[j];
-                break;
-            }
-        }
-        if (!found) {
-            continue;
-        }
-
-        if (score > device_score) {
-            device_idx = i;
-            device_score = score;
-        }
-    }
-
-    if (device_score == 0) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to find suitable device!", NULL);
-        goto cleanup_phyical_devices;
-    }
-
-    // Create virtual device
-    const float queue_priority = 1.0f;
-    const char *device_enabled_extension_names = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
-    VkDeviceCreateInfo vk_device_create_info = {
-        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &(VkDeviceQueueCreateInfo) {
-            .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-            .queueFamilyIndex = queue_family_idx,
-            .queueCount = 1,
-            .pQueuePriorities = &queue_priority,
-        },
-        .enabledExtensionCount = 1,
-        .ppEnabledExtensionNames = &device_enabled_extension_names,
-        .pEnabledFeatures = &device_features,
-    };
-
-    VkDevice vk_device = NULL;
-    error = vkCreateDevice(kv_physical_devices[device_idx], &vk_device_create_info, NULL, &vk_device);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create device!", NULL);
-        goto cleanup_virtual_device;
-    }
-
-    // Get Queue
-    VkQueue vk_queue = NULL;
-    vkGetDeviceQueue(vk_device, queue_family_idx, 0, &vk_queue);
-
-    // Create the Swapchain
-    VkSwapchainCreateInfoKHR vk_swapchain_create_info = {
-        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-        .surface = vk_surface,
-        .minImageCount = device_image_count,
-        .imageFormat = device_surface_format.format,
-        .imageColorSpace = device_surface_format.colorSpace,
-        .imageExtent = device_extent2D,
-        .imageArrayLayers = 1,
-        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
-        .queueFamilyIndexCount = 0,
-        .pQueueFamilyIndices = NULL,
-        .preTransform = device_pre_transform,
-        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        .presentMode = device_present_mode,
-        .clipped = VK_TRUE,
-        .oldSwapchain = VK_NULL_HANDLE,
-    };
-
-    VkSwapchainKHR vk_swapchain;
-    error = vkCreateSwapchainKHR(vk_device, &vk_swapchain_create_info, NULL, &vk_swapchain);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create swapchain!", NULL);
-        goto cleanup_virtual_device;
-    }
-
-    // Get the swapchange images
-    uint32_t vk_swapchain_image_count = 0;
-    error = vkGetSwapchainImagesKHR(vk_device, vk_swapchain, &vk_swapchain_image_count, NULL);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to get swapchain image count!", NULL);
-        goto cleanup_swapchain;
-    }
-
-    VkImage *vk_images = mmalloc(sizeof(VkImage) * vk_swapchain_image_count);
-    error = vkGetSwapchainImagesKHR(vk_device, vk_swapchain, &vk_swapchain_image_count, vk_images);
-    if (error != VK_SUCCESS) {
-        mfree(vk_images);
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to get swapchain images!", NULL);
-        goto cleanup_swapchain;
-    }
-
-    VkImageView *vk_image_views = mmalloc(sizeof(VkImageView) * vk_swapchain_image_count);
-
-    for (uint32_t i = 0; i < vk_swapchain_image_count; i++) {
-        VkImageViewCreateInfo vk_image_view_create_info = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .image = vk_images[i],
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = device_surface_format.format,
-            .components = {
-                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-                .a = VK_COMPONENT_SWIZZLE_IDENTITY,
-            },
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1
-            }
-        };
-        error = vkCreateImageView(vk_device, &vk_image_view_create_info, NULL, &vk_image_views[i]);
-        if (error != VK_SUCCESS) {
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create image view!", NULL);
-            goto cleanup_imageviews;
-        }
-    }
+    Window window;
+    vk_window_create(&window, "fds", 800, 600);
 
     // Load and Create shaders
     char shader_path[512];
@@ -489,7 +127,7 @@ int main(void) {
     };
 
     VkShaderModule vert_shader_module;
-    error = vkCreateShaderModule(vk_device, &vert_shader_create_info, NULL, &vert_shader_module);
+    VkResult error = vkCreateShaderModule(window.vk_device, &vert_shader_create_info, NULL, &vert_shader_module);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create vert shader!", NULL);
         goto cleanup_vert;
@@ -510,7 +148,7 @@ int main(void) {
     };
 
     VkShaderModule frag_shader_module;
-    error = vkCreateShaderModule(vk_device, &frag_shader_create_info, NULL, &frag_shader_module);
+    error = vkCreateShaderModule(window.vk_device, &frag_shader_create_info, NULL, &frag_shader_module);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create frag shader!", NULL);
         goto cleanup_frag;
@@ -628,14 +266,14 @@ int main(void) {
     VkViewport vk_viewport = {
         .x = 0.0f,
         .y = 0.0f,
-        .width = (float)device_extent2D.width,
-        .height = (float)device_extent2D.height,
+        .width = (float)window.vk_extent2D.width,
+        .height = (float)window.vk_extent2D.height,
         .minDepth = 0.0f,
         .maxDepth = 1.0f,
     };
 
     VkRect2D vk_scissor = {
-        .extent = device_extent2D,
+        .extent = window.vk_extent2D,
         .offset = {0, 0},
     };
 
@@ -668,7 +306,7 @@ int main(void) {
     };
 
     VkDescriptorSetLayout camera_descriptor_set_layout = {};
-    error = vkCreateDescriptorSetLayout(vk_device, &camera_descriptor_set_create_info, NULL, &camera_descriptor_set_layout);
+    error = vkCreateDescriptorSetLayout(window.vk_device, &camera_descriptor_set_create_info, NULL, &camera_descriptor_set_layout);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create camera descriptor set!", NULL);
         exit(0);
@@ -676,10 +314,10 @@ int main(void) {
 
     VkBuffer camera_data_buffer = {};
     VkDeviceMemory camera_data_buffer_memory = {};
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(CameraBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &camera_data_buffer, &camera_data_buffer_memory);
+    create_vkbuffer(window.vk_device, window.vk_physical_device, sizeof(CameraBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &camera_data_buffer, &camera_data_buffer_memory);
 
     void *camera_data_ptr;
-    vkMapMemory(vk_device, camera_data_buffer_memory, 0, sizeof(CameraBuffer), 0, &camera_data_ptr);
+    vkMapMemory(window.vk_device, camera_data_buffer_memory, 0, sizeof(CameraBuffer), 0, &camera_data_ptr);
 
     // Create Descriptor pool
     VkDescriptorPoolCreateInfo descriptor_pool_create_info = {
@@ -699,7 +337,7 @@ int main(void) {
     };
 
     VkDescriptorPool vk_descriptor_pool = {};
-    error = vkCreateDescriptorPool(vk_device, &descriptor_pool_create_info, NULL, &vk_descriptor_pool);
+    error = vkCreateDescriptorPool(window.vk_device, &descriptor_pool_create_info, NULL, &vk_descriptor_pool);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create descriptor pool!", NULL);
         exit(0);
@@ -714,7 +352,7 @@ int main(void) {
     };
 
     VkDescriptorSet vk_descriptor_sets;
-    error = vkAllocateDescriptorSets(vk_device, &descriptor_set_allocate_info, &vk_descriptor_sets);
+    error = vkAllocateDescriptorSets(window.vk_device, &descriptor_set_allocate_info, &vk_descriptor_sets);
 
     // Create the Pipeline layout
     VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
@@ -726,7 +364,7 @@ int main(void) {
     };
 
     VkPipelineLayout vk_pipieline_layout = {};
-    error = vkCreatePipelineLayout(vk_device, &pipeline_layout_create_info, NULL, &vk_pipieline_layout);
+    error = vkCreatePipelineLayout(window.vk_device, &pipeline_layout_create_info, NULL, &vk_pipieline_layout);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create pipeline layput!", NULL);
         goto cleanup_pipeline;
@@ -738,7 +376,7 @@ int main(void) {
         .attachmentCount = 2,
         .pAttachments = (VkAttachmentDescription[]) {
             {
-                .format = device_surface_format.format,
+                .format = window.vk_surface_format.format,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
                 .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                 .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -748,7 +386,7 @@ int main(void) {
                 .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
             },
             {
-                .format = device_depth_format,
+                .format = window.vk_depth_format,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
                 .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                 .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -785,7 +423,7 @@ int main(void) {
     };
 
     VkRenderPass vk_render_pass = {};
-    error = vkCreateRenderPass(vk_device, &render_pass_create_info, NULL, &vk_render_pass);
+    error = vkCreateRenderPass(window.vk_device, &render_pass_create_info, NULL, &vk_render_pass);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create render pass!", NULL);
         goto cleanup_renderpass;
@@ -795,12 +433,12 @@ int main(void) {
     VkImageCreateInfo depth_image_info = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .imageType = VK_IMAGE_TYPE_2D,
-        .extent.width = device_extent2D.width,
-        .extent.height = device_extent2D.height,
+        .extent.width = window.vk_extent2D.width,
+        .extent.height = window.vk_extent2D.height,
         .extent.depth = 1,
         .mipLevels = 1,
         .arrayLayers = 1,
-        .format = device_depth_format,
+        .format = window.vk_depth_format,
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
         .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -809,17 +447,17 @@ int main(void) {
     };
 
     VkImage depth_image;
-    error = vkCreateImage(vk_device, &depth_image_info, NULL, &depth_image);
+    error = vkCreateImage(window.vk_device, &depth_image_info, NULL, &depth_image);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create depth image!", NULL);
         exit(0);
     }
 
     VkMemoryRequirements depth_mem_req;;
-    vkGetImageMemoryRequirements(vk_device, depth_image, &depth_mem_req);
+    vkGetImageMemoryRequirements(window.vk_device, depth_image, &depth_mem_req);
 
     VkPhysicalDeviceMemoryProperties depth_vk_memory_properties;
-    vkGetPhysicalDeviceMemoryProperties(kv_physical_devices[device_idx], &depth_vk_memory_properties);
+    vkGetPhysicalDeviceMemoryProperties(window.vk_physical_device, &depth_vk_memory_properties);
 
     uint32_t depth_memory_type_idx = 0;
     uint32_t depth_prop = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
@@ -843,17 +481,17 @@ int main(void) {
     };
 
     VkDeviceMemory depth_image_memory;
-    if (vkAllocateMemory(vk_device, &depth_alloc_info, NULL, &depth_image_memory) != VK_SUCCESS) {
+    if (vkAllocateMemory(window.vk_device, &depth_alloc_info, NULL, &depth_image_memory) != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to allocate memory for depth image!", NULL);
         exit(0);
     }
-    vkBindImageMemory(vk_device, depth_image, depth_image_memory, 0);
+    vkBindImageMemory(window.vk_device, depth_image, depth_image_memory, 0);
 
         VkImageViewCreateInfo depth_image_view_create_info = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image = depth_image,
         .viewType = VK_IMAGE_VIEW_TYPE_2D,
-        .format = device_depth_format,
+        .format = window.vk_depth_format,
         .subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
         .subresourceRange.baseMipLevel = 0,
         .subresourceRange.levelCount = 1,
@@ -862,7 +500,7 @@ int main(void) {
     };
 
     VkImageView depth_image_view;
-    error = vkCreateImageView(vk_device, &depth_image_view_create_info, NULL, &depth_image_view);
+    error = vkCreateImageView(window.vk_device, &depth_image_view_create_info, NULL, &depth_image_view);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create depth image view!", NULL);
         exit(0);
@@ -903,30 +541,30 @@ int main(void) {
     };
 
     VkPipeline vk_graphics_pipeline = {};
-    error = vkCreateGraphicsPipelines(vk_device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, NULL, &vk_graphics_pipeline);
+    error = vkCreateGraphicsPipelines(window.vk_device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, NULL, &vk_graphics_pipeline);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create graphics pipeline!", NULL);
         goto vk_graphics_pipeline;
     }
 
     // Create FromeBuffers
-    VkFramebuffer *vk_frame_buffers = mmalloc(sizeof(VkFramebuffer) * device_image_count);
+    VkFramebuffer *vk_frame_buffers = mmalloc(sizeof(VkFramebuffer) * window.image_count);
 
-    for (uint32_t i = 0; i < device_image_count; i ++) {
+    for (uint32_t i = 0; i < window.image_count; i ++) {
         VkFramebufferCreateInfo frame_buffer_create_info = {
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .renderPass = vk_render_pass,
             .attachmentCount = 2,
             .pAttachments = (VkImageView[]) {
-                vk_image_views[i],
+                window.images[i].vk_image_view,
                 depth_image_view,
             },
-            .width = device_extent2D.width,
-            .height = device_extent2D.height,
+            .width = window.vk_extent2D.width,
+            .height = window.vk_extent2D.height,
             .layers = 1,
         };
 
-        error = vkCreateFramebuffer(vk_device, &frame_buffer_create_info, NULL, &vk_frame_buffers[i]);
+        error = vkCreateFramebuffer(window.vk_device, &frame_buffer_create_info, NULL, &vk_frame_buffers[i]);
         if (error != VK_SUCCESS) {
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create frame buffers!", NULL);
             goto vk_image_buffers;
@@ -937,11 +575,11 @@ int main(void) {
     VkCommandPoolCreateInfo command_pool_create_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-        .queueFamilyIndex = queue_family_idx,
+        .queueFamilyIndex = window.vk_queue_index,
     };
 
     VkCommandPool vk_command_pool = {};
-    error = vkCreateCommandPool(vk_device, &command_pool_create_info, NULL, &vk_command_pool);
+    error = vkCreateCommandPool(window.vk_device, &command_pool_create_info, NULL, &vk_command_pool);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create command pool!", NULL);
         goto vk_image_buffers;
@@ -956,7 +594,7 @@ int main(void) {
     };
 
     VkCommandBuffer vk_command_buffer = {};
-    error = vkAllocateCommandBuffers(vk_device, &command_buffer_create_info, &vk_command_buffer);
+    error = vkAllocateCommandBuffers(window.vk_device, &command_buffer_create_info, &vk_command_buffer);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create command buffer!", NULL);
         goto vk_command_pool;
@@ -969,8 +607,8 @@ int main(void) {
 
     VkSemaphore vk_image_available_semaphore;
     VkSemaphore vk_render_finished_semaphore;
-    vkCreateSemaphore(vk_device, &semaphoreInfo, NULL, &vk_image_available_semaphore);
-    vkCreateSemaphore(vk_device, &semaphoreInfo, NULL, &vk_render_finished_semaphore);
+    vkCreateSemaphore(window.vk_device, &semaphoreInfo, NULL, &vk_image_available_semaphore);
+    vkCreateSemaphore(window.vk_device, &semaphoreInfo, NULL, &vk_render_finished_semaphore);
 
     // Create current frame Fence
     VkFenceCreateInfo fence_create_info = {
@@ -979,7 +617,7 @@ int main(void) {
     };
 
     VkFence current_frame_fence;
-    error = vkCreateFence(vk_device, &fence_create_info, NULL, &current_frame_fence);
+    error = vkCreateFence(window.vk_device, &fence_create_info, NULL, &current_frame_fence);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create current frame fence!", NULL);
         goto vk_command_buffer;
@@ -1001,12 +639,12 @@ int main(void) {
 
     VkBuffer image_staging_buffer;
     VkDeviceMemory image_staging_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &image_staging_buffer, &image_staging_buffer_memory);
+    create_vkbuffer(window.vk_device, window.vk_physical_device, image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &image_staging_buffer, &image_staging_buffer_memory);
 
     void *image_data;
-    vkMapMemory(vk_device, image_staging_buffer_memory, 0, image_size, 0, &image_data);
+    vkMapMemory(window.vk_device, image_staging_buffer_memory, 0, image_size, 0, &image_data);
     memcpy(image_data, pixels, image_size);
-    vkUnmapMemory(vk_device, image_staging_buffer_memory);
+    vkUnmapMemory(window.vk_device, image_staging_buffer_memory);
 
     stbi_image_free(pixels);
 
@@ -1028,17 +666,17 @@ int main(void) {
     };
 
     VkImage vk_image;
-    error = vkCreateImage(vk_device, &image_create_info, NULL, &vk_image);
+    error = vkCreateImage(window.vk_device, &image_create_info, NULL, &vk_image);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create image!", NULL);
         exit(0);
     }
 
     VkMemoryRequirements image_memory_requirements;
-    vkGetImageMemoryRequirements(vk_device, vk_image, &image_memory_requirements);
+    vkGetImageMemoryRequirements(window.vk_device, vk_image, &image_memory_requirements);
 
     VkPhysicalDeviceMemoryProperties image_vk_memory_properties;
-    vkGetPhysicalDeviceMemoryProperties(kv_physical_devices[device_idx], &image_vk_memory_properties);
+    vkGetPhysicalDeviceMemoryProperties(window.vk_physical_device, &image_vk_memory_properties);
 
     uint32_t image_memory_type_idx = 0;
     uint32_t image_prop = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
@@ -1062,11 +700,11 @@ int main(void) {
     };
 
     VkDeviceMemory vk_image_memory;
-    if (vkAllocateMemory(vk_device, &image_alloc_info, NULL, &vk_image_memory) != VK_SUCCESS) {
+    if (vkAllocateMemory(window.vk_device, &image_alloc_info, NULL, &vk_image_memory) != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to allocate memory forimage!", NULL);
         exit(0);
     }
-    vkBindImageMemory(vk_device, vk_image, vk_image_memory, 0);
+    vkBindImageMemory(window.vk_device, vk_image, vk_image_memory, 0);
 
     // Create Barrier
     VkCommandBufferAllocateInfo image_cmd_buffer_info = {
@@ -1077,7 +715,7 @@ int main(void) {
     };
 
     VkCommandBuffer image_cmd_buffer;
-    vkAllocateCommandBuffers(vk_device, &image_cmd_buffer_info, &image_cmd_buffer);
+    vkAllocateCommandBuffers(window.vk_device, &image_cmd_buffer_info, &image_cmd_buffer);
 
     VkCommandBufferBeginInfo image_cmd_begin_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -1113,10 +751,10 @@ int main(void) {
         .pCommandBuffers = &image_cmd_buffer,
     };
 
-    vkQueueSubmit(vk_queue, 1, &image_submit_info, VK_NULL_HANDLE);
-    vkQueueWaitIdle(vk_queue);
+    vkQueueSubmit(window.vk_queue, 1, &image_submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(window.vk_queue);
 
-    vkFreeCommandBuffers(vk_device, vk_command_pool, 1, &image_cmd_buffer);
+    vkFreeCommandBuffers(window.vk_device, vk_command_pool, 1, &image_cmd_buffer);
 
     // Copy to Buffer
     image_cmd_buffer_info = (VkCommandBufferAllocateInfo) {
@@ -1125,7 +763,7 @@ int main(void) {
         .commandPool = vk_command_pool,
         .commandBufferCount = 1,
     };
-    vkAllocateCommandBuffers(vk_device, &image_cmd_buffer_info, &image_cmd_buffer);
+    vkAllocateCommandBuffers(window.vk_device, &image_cmd_buffer_info, &image_cmd_buffer);
 
     image_cmd_begin_info = (VkCommandBufferBeginInfo) {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -1160,10 +798,10 @@ int main(void) {
         .pCommandBuffers = &image_cmd_buffer,
     };
 
-    vkQueueSubmit(vk_queue, 1, &image_submit_info, VK_NULL_HANDLE);
-    vkQueueWaitIdle(vk_queue);
+    vkQueueSubmit(window.vk_queue, 1, &image_submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(window.vk_queue);
 
-    vkFreeCommandBuffers(vk_device, vk_command_pool, 1, &image_cmd_buffer);
+    vkFreeCommandBuffers(window.vk_device, vk_command_pool, 1, &image_cmd_buffer);
 
     // Create Barrier
     image_cmd_buffer_info = (VkCommandBufferAllocateInfo) {
@@ -1172,7 +810,7 @@ int main(void) {
         .commandPool = vk_command_pool,
         .commandBufferCount = 1,
     };
-    vkAllocateCommandBuffers(vk_device, &image_cmd_buffer_info, &image_cmd_buffer);
+    vkAllocateCommandBuffers(window.vk_device, &image_cmd_buffer_info, &image_cmd_buffer);
 
     image_cmd_begin_info = (VkCommandBufferBeginInfo) {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -1206,10 +844,10 @@ int main(void) {
         .pCommandBuffers = &image_cmd_buffer,
     };
 
-    vkQueueSubmit(vk_queue, 1, &image_submit_info, VK_NULL_HANDLE);
-    vkQueueWaitIdle(vk_queue);
+    vkQueueSubmit(window.vk_queue, 1, &image_submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(window.vk_queue);
 
-    vkFreeCommandBuffers(vk_device, vk_command_pool, 1, &image_cmd_buffer);
+    vkFreeCommandBuffers(window.vk_device, vk_command_pool, 1, &image_cmd_buffer);
 
     // Create an ImageView for the image
     VkImageViewCreateInfo image_image_view_create_info = {
@@ -1225,7 +863,7 @@ int main(void) {
     };
 
     VkImageView image_image_view;
-    error = vkCreateImageView(vk_device, &image_image_view_create_info, NULL, &image_image_view);
+    error = vkCreateImageView(window.vk_device, &image_image_view_create_info, NULL, &image_image_view);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create image image view!", NULL);
         exit(0);
@@ -1240,7 +878,7 @@ int main(void) {
         .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
         .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
         .anisotropyEnable = VK_TRUE,
-        .maxAnisotropy = device_properties.limits.maxSamplerAnisotropy,
+        .maxAnisotropy = window.max_sampler_anisotropy,
         .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
         .unnormalizedCoordinates = VK_FALSE,
         .compareEnable = VK_FALSE,
@@ -1252,7 +890,7 @@ int main(void) {
     };
 
     VkSampler image_sampler;
-    error = vkCreateSampler(vk_device, &image_sampler_create_info, NULL, &image_sampler);
+    error = vkCreateSampler(window.vk_device, &image_sampler_create_info, NULL, &image_sampler);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create image samapler!", NULL);
         exit(0);
@@ -1275,17 +913,17 @@ int main(void) {
     // Staging
     VkBuffer src_vk_vertex_buffer;
     VkDeviceMemory src_vertext_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(Vertex) * vertexes.size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_vertex_buffer, &src_vertext_buffer_memory);
+    create_vkbuffer(window.vk_device, window.vk_physical_device, sizeof(Vertex) * vertexes.size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_vertex_buffer, &src_vertext_buffer_memory);
 
     void *data;
-    vkMapMemory(vk_device, src_vertext_buffer_memory, 0, sizeof(Vertex) * vertexes.size, 0, &data);
+    vkMapMemory(window.vk_device, src_vertext_buffer_memory, 0, sizeof(Vertex) * vertexes.size, 0, &data);
     memcpy(data, vertexes.data, sizeof(Vertex) * vertexes.size);
-    vkUnmapMemory(vk_device, src_vertext_buffer_memory);
+    vkUnmapMemory(window.vk_device, src_vertext_buffer_memory);
 
     // Dest
     VkBuffer vk_vertex_buffer;
     VkDeviceMemory vertext_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(Vertex) * vertexes.size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_vertex_buffer, &vertext_buffer_memory);
+    create_vkbuffer(window.vk_device, window.vk_physical_device, sizeof(Vertex) * vertexes.size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_vertex_buffer, &vertext_buffer_memory);
 
     // Copy Src to dest
     // Can move to seperate command pool / buffer
@@ -1297,7 +935,7 @@ int main(void) {
     };
 
     VkCommandBuffer copy_cmd_buffer;
-    vkAllocateCommandBuffers(vk_device, &copy_cmd_buffer_info, &copy_cmd_buffer);
+    vkAllocateCommandBuffers(window.vk_device, &copy_cmd_buffer_info, &copy_cmd_buffer);
 
     VkCommandBufferBeginInfo copy_begin_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -1320,11 +958,11 @@ int main(void) {
         .commandBufferCount = 1,
         .pCommandBuffers = &copy_cmd_buffer,
     };
-    vkQueueSubmit(vk_queue, 1, &copy_submit_info, VK_NULL_HANDLE);
-    vkQueueWaitIdle(vk_queue);
+    vkQueueSubmit(window.vk_queue, 1, &copy_submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(window.vk_queue);
 
-    vkDestroyBuffer(vk_device, src_vk_vertex_buffer, NULL);
-    vkFreeMemory(vk_device, src_vertext_buffer_memory, NULL);
+    vkDestroyBuffer(window.vk_device, src_vk_vertex_buffer, NULL);
+    vkFreeMemory(window.vk_device, src_vertext_buffer_memory, NULL);
 
     // Load Index Buffer
     /*uint32_t total_index_count = 1;
@@ -1336,16 +974,16 @@ int main(void) {
     // Staging
     VkBuffer src_vk_index_buffer;
     VkDeviceMemory src_index_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint32_t) * indices.size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_index_buffer, &src_index_buffer_memory);
+    create_vkbuffer(window.vk_device, window.vk_physical_device, sizeof(uint32_t) * indices.size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &src_vk_index_buffer, &src_index_buffer_memory);
 
-    vkMapMemory(vk_device, src_index_buffer_memory, 0, sizeof(uint32_t) * indices.size, 0, &data);
+    vkMapMemory(window.vk_device, src_index_buffer_memory, 0, sizeof(uint32_t) * indices.size, 0, &data);
     memcpy(data, indices.data, sizeof(uint32_t) * indices.size);
-    vkUnmapMemory(vk_device, src_index_buffer_memory);
+    vkUnmapMemory(window.vk_device, src_index_buffer_memory);
 
     // Dest
     VkBuffer vk_index_buffer;
     VkDeviceMemory index_buffer_memory;
-    create_vkbuffer(vk_device, kv_physical_devices[device_idx], sizeof(uint32_t) * indices.size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_index_buffer, &index_buffer_memory);
+    create_vkbuffer(window.vk_device, window.vk_physical_device, sizeof(uint32_t) * indices.size, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &vk_index_buffer, &index_buffer_memory);
 
     // Copy Src to dest
     // Can move to seperate command pool / buffer
@@ -1356,7 +994,7 @@ int main(void) {
         .commandBufferCount = 1,
     };
 
-    vkAllocateCommandBuffers(vk_device, &index_copy_cmd_buffer_info, &copy_cmd_buffer);
+    vkAllocateCommandBuffers(window.vk_device, &index_copy_cmd_buffer_info, &copy_cmd_buffer);
 
     VkCommandBufferBeginInfo index_copy_begin_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -1379,11 +1017,11 @@ int main(void) {
         .commandBufferCount = 1,
         .pCommandBuffers = &copy_cmd_buffer,
     };
-    vkQueueSubmit(vk_queue, 1, &index_copy_submit_info, VK_NULL_HANDLE);
-    vkQueueWaitIdle(vk_queue);
+    vkQueueSubmit(window.vk_queue, 1, &index_copy_submit_info, VK_NULL_HANDLE);
+    vkQueueWaitIdle(window.vk_queue);
 
-    vkDestroyBuffer(vk_device, src_vk_index_buffer, NULL);
-    vkFreeMemory(vk_device, src_index_buffer_memory, NULL);
+    vkDestroyBuffer(window.vk_device, src_vk_index_buffer, NULL);
+    vkFreeMemory(window.vk_device, src_index_buffer_memory, NULL);
 
     // Set up writes
     VkWriteDescriptorSet write_descriptor_set = {
@@ -1417,7 +1055,7 @@ int main(void) {
         .pBufferInfo = NULL,
         .pTexelBufferView = NULL,
     };
-    vkUpdateDescriptorSets(vk_device, 2, (VkWriteDescriptorSet[]){write_descriptor_set, write_descriptor_set_image}, 0, NULL);
+    vkUpdateDescriptorSets(window.vk_device, 2, (VkWriteDescriptorSet[]){write_descriptor_set, write_descriptor_set_image}, 0, NULL);
 
     // Main loop
     SDL_Event event;
@@ -1451,7 +1089,7 @@ int main(void) {
                 }
 
                 if (camera_event(&camera, event) && mouse_capture) {
-                    SDL_WarpMouseInWindow(window, (int)(window_width / 2), (int)(window_height / 2));
+                    SDL_WarpMouseInWindow(window.sdl_window, (int)(window_width / 2), (int)(window_height / 2));
                 }
 
                 if (event.type == SDL_MOUSEBUTTONDOWN) {
@@ -1476,8 +1114,8 @@ int main(void) {
         fps++;
 
         // Render
-        vkWaitForFences(vk_device, 1, &current_frame_fence, VK_TRUE, UINT64_MAX);
-        vkResetFences(vk_device, 1, &current_frame_fence);
+        vkWaitForFences(window.vk_device, 1, &current_frame_fence, VK_TRUE, UINT64_MAX);
+        vkResetFences(window.vk_device, 1, &current_frame_fence);
 
         // Create CameraBuffer
         CameraBuffer camera_bufffer = {
@@ -1509,13 +1147,13 @@ int main(void) {
 
         camera_get_bias(&camera, camera_bufffer.view);
 
-        mat4_perspective(camera_bufffer.proj, degtorad(45), (float)device_extent2D.width / (float)device_extent2D.height, (float)0.1, (float)10.0);
+        mat4_perspective(camera_bufffer.proj, degtorad(45), (float)window.vk_extent2D.width / (float)window.vk_extent2D.height, (float)0.1, (float)10.0);
         camera_bufffer.proj[1][1] *= -1;
 
         memcpy(camera_data_ptr, &camera_bufffer, sizeof(CameraBuffer));
 
         uint32_t imageIndex;
-        vkAcquireNextImageKHR(vk_device, vk_swapchain, UINT64_MAX, vk_image_available_semaphore, VK_NULL_HANDLE, &imageIndex);
+        vkAcquireNextImageKHR(window.vk_device, window.vk_swapchain, UINT64_MAX, vk_image_available_semaphore, VK_NULL_HANDLE, &imageIndex);
 
         vkResetCommandBuffer(vk_command_buffer, 0);
 
@@ -1538,7 +1176,7 @@ int main(void) {
             .framebuffer = vk_frame_buffers[imageIndex],
             .renderArea = {
                 .offset = {0, 0},
-                .extent = device_extent2D,
+                .extent = window.vk_extent2D,
             },
             .clearValueCount = 2,
             .pClearValues = (VkClearValue[]) {
@@ -1599,7 +1237,7 @@ int main(void) {
             },
         };
 
-        error = vkQueueSubmit(vk_queue, 1, &submit_info, current_frame_fence);
+        error = vkQueueSubmit(window.vk_queue, 1, &submit_info, current_frame_fence);
         if (error != VK_SUCCESS) {
             running = false;
         }
@@ -1612,13 +1250,13 @@ int main(void) {
             },
             .swapchainCount = 1,
             .pSwapchains = (VkSwapchainKHR[]) {
-                vk_swapchain,
+                window.vk_swapchain,
             },
             .pImageIndices = &imageIndex,
             .pResults = NULL,
         };
 
-        vkQueuePresentKHR(vk_queue, &present_info);
+        vkQueuePresentKHR(window.vk_queue, &present_info);
 
 
         if (SDL_GetTicks() - timer > 1000) {
@@ -1634,52 +1272,32 @@ int main(void) {
     //vkDestroyBuffer(vk_device, vk_vertex_buffer, NULL);
     //vkFreeMemory(vk_device, vertext_buffer_memory, NULL);
 //vk_fence:
-    vkDestroyBuffer(vk_device, vk_vertex_buffer, NULL);
-    vkDestroyFence(vk_device, current_frame_fence, NULL);
+    vkDestroyBuffer(window.vk_device, vk_vertex_buffer, NULL);
+    vkDestroyFence(window.vk_device, current_frame_fence, NULL);
 vk_command_buffer:
-    vkFreeCommandBuffers(vk_device, vk_command_pool, 1, &vk_command_buffer);
+    vkFreeCommandBuffers(window.vk_device, vk_command_pool, 1, &vk_command_buffer);
 vk_command_pool:
-    vkDestroyCommandPool(vk_device, vk_command_pool, NULL);
+    vkDestroyCommandPool(window.vk_device, vk_command_pool, NULL);
 vk_image_buffers:
-    for (uint32_t i = 0; i < device_image_count; i ++) {
+    for (uint32_t i = 0; i < window.image_count; i ++) {
         //mfree(vk_frame_buffers[i]);
     }
     mfree(vk_frame_buffers);
-    vkDestroyPipeline(vk_device, vk_graphics_pipeline, NULL);
+    vkDestroyPipeline(window.vk_device, vk_graphics_pipeline, NULL);
 vk_graphics_pipeline:
-    vkDestroyRenderPass(vk_device, vk_render_pass, NULL);
+    vkDestroyRenderPass(window.vk_device, vk_render_pass, NULL);
 cleanup_renderpass:
-    vkDestroyPipelineLayout(vk_device, vk_pipieline_layout, NULL);
+    vkDestroyPipelineLayout(window.vk_device, vk_pipieline_layout, NULL);
 cleanup_pipeline:
-    vkDestroyShaderModule(vk_device, frag_shader_module, NULL);
+    vkDestroyShaderModule(window.vk_device, frag_shader_module, NULL);
 cleanup_frag:
     mfree(frag_shader);
-    vkDestroyShaderModule(vk_device, vert_shader_module, NULL);
+    vkDestroyShaderModule(window.vk_device, vert_shader_module, NULL);
 cleanup_vert:
     mfree(vert_shader);
 cleanup_imageviews:
-    for (uint32_t i = 0; i < vk_swapchain_image_count; i++) {
-        vkDestroyImageView(vk_device, vk_image_views[i], NULL);
-    }
-    mfree(vk_image_views);
-    for (uint32_t i = 0; i < vk_swapchain_image_count; i++) {
-        vkDestroyImage(vk_device, vk_images[i], NULL);
-    }
-    mfree(vk_images);
-cleanup_swapchain:
     //vkDestroySwapchainKHR(vk_device, vk_swapchain, NULL);
-cleanup_virtual_device:
-    vkDestroyDevice(vk_device, NULL);
-cleanup_phyical_devices:
-    mfree(kv_physical_devices);
-cleanup_surface:
-    vkDestroySurfaceKHR(vk_instance, vk_surface, NULL);
-    SDL_DestroyWindowSurface(window);
-cleanup_instance:
-    vkDestroyInstance(vk_instance, NULL);
-    mfree(extension_names);
-cleanup:
-    SDL_DestroyWindow(window);
+    vk_window_free(&window);
     SDL_Vulkan_UnloadLibrary();
     SDL_Quit();
 
