@@ -116,158 +116,7 @@ int main(void) {
 
     Surface *surface = surface_create(&renderer, &window, vertexes, indices, texture);
 
-    // Load and Create shaders
-    char shader_path[512];
-    get_resource_path(shader_path, "shaders/vert_shader.spv");
-    size_t vert_shader_len = {};
-    char *vert_shader = read_file(shader_path, &vert_shader_len);
-    if (!vert_shader) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to load vert shader!", NULL);
-        goto cleanup_imageviews;
-    }
-
-    VkShaderModuleCreateInfo vert_shader_create_info = {
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = vert_shader_len,
-        .pCode = (uint32_t *)vert_shader,
-    };
-
-    VkShaderModule vert_shader_module;
-    VkResult error = vkCreateShaderModule(window.vk_device, &vert_shader_create_info, NULL, &vert_shader_module);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create vert shader!", NULL);
-        goto cleanup_vert;
-    }
-
-    get_resource_path(shader_path, "shaders/frag_shader.spv");
-    size_t frag_shader_len = {};
-    char *frag_shader = read_file(shader_path, &frag_shader_len);
-    if (!frag_shader) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to load frag shader!", NULL);
-        goto cleanup_vert;
-    }
-
-    VkShaderModuleCreateInfo frag_shader_create_info = {
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = frag_shader_len,
-        .pCode = (uint32_t *)frag_shader,
-    };
-
-    VkShaderModule frag_shader_module;
-    error = vkCreateShaderModule(window.vk_device, &frag_shader_create_info, NULL, &frag_shader_module);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create frag shader!", NULL);
-        goto cleanup_frag;
-    }
-
-    // Create shaderPipeline
-    VkPipelineShaderStageCreateInfo vert_shader_stage_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-        .stage = VK_SHADER_STAGE_VERTEX_BIT,
-        .module = vert_shader_module,
-        .pName = "main",
-    };
-
-    VkPipelineShaderStageCreateInfo frag_shader_stage_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-        .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-        .module = frag_shader_module,
-        .pName = "main",
-    };
-
     // Create Fixed functions Pipelines
-
-    // Define vertex data
-    VkPipelineVertexInputStateCreateInfo vertex_input_state_create_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .vertexBindingDescriptionCount = 1,
-        .pVertexBindingDescriptions = &(VkVertexInputBindingDescription) {
-            .binding = 0,
-            .stride = sizeof(Vertex),
-            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-        },
-        .vertexAttributeDescriptionCount = 3,
-        .pVertexAttributeDescriptions = (VkVertexInputAttributeDescription[]) {
-            {
-                .binding = 0,
-                .location = 0,
-                .format = VK_FORMAT_R32G32B32_SFLOAT,
-                .offset = offsetof(Vertex, pos),
-            },
-            {
-                .binding = 0,
-                .location = 1,
-                .format = VK_FORMAT_R32G32B32A32_SFLOAT,
-                .offset = offsetof(Vertex, color),
-            },
-            {
-                .binding = 0,
-                .location = 2,
-                .format = VK_FORMAT_R32G32_SFLOAT,
-                .offset = offsetof(Vertex, tex_coord),
-            },
-        },
-    };
-
-    VkPipelineInputAssemblyStateCreateInfo input_assembly_state_create_info ={
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        .primitiveRestartEnable = VK_FALSE,
-    };
-
-    VkPipelineRasterizationStateCreateInfo rasterizer_state_create_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .depthClampEnable = VK_FALSE,
-        .polygonMode = VK_POLYGON_MODE_FILL,
-        .cullMode = VK_CULL_MODE_NONE,
-        .frontFace = VK_FRONT_FACE_CLOCKWISE,
-        .depthBiasEnable = VK_FALSE,
-        .depthBiasConstantFactor = 0.0,
-        .depthBiasClamp = 0.0,
-        .depthBiasSlopeFactor = 0.0,
-        .lineWidth = 1.0,
-    };
-
-    VkPipelineMultisampleStateCreateInfo multisample_state_create_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .sampleShadingEnable = VK_FALSE,
-        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
-        .minSampleShading = 1.0,
-        .pSampleMask = NULL,
-        .alphaToCoverageEnable = VK_FALSE,
-        .alphaToOneEnable = VK_FALSE,
-    };
-
-    VkPipelineColorBlendStateCreateInfo color_blend_state_create_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-        .logicOpEnable = VK_FALSE,
-        .logicOp = VK_LOGIC_OP_COPY,
-        .attachmentCount = 1,
-        .pAttachments = &(VkPipelineColorBlendAttachmentState) {
-            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-            .blendEnable = VK_TRUE,
-            .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-            .colorBlendOp = VK_BLEND_OP_ADD,
-            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-            .alphaBlendOp = VK_BLEND_OP_ADD,
-        },
-        .blendConstants[0] = 0.0,
-        .blendConstants[1] = 0.0,
-        .blendConstants[2] = 0.0,
-        .blendConstants[3] = 0.0,
-    };
-
-    // Create Viewport
-    VkPipelineDynamicStateCreateInfo dynamic_state_create_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-        .dynamicStateCount = 2,
-        .pDynamicStates = (VkDynamicState[]) {
-            VK_DYNAMIC_STATE_VIEWPORT,
-            VK_DYNAMIC_STATE_SCISSOR,
-        },
-    };
 
     VkViewport vk_viewport = {
         .x = 0.0f,
@@ -281,12 +130,6 @@ int main(void) {
     VkRect2D vk_scissor = {
         .extent = window.vk_extent2D,
         .offset = {0, 0},
-    };
-
-    VkPipelineViewportStateCreateInfo viewport_state_create_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-        .viewportCount = 1,
-        .scissorCount = 1,
     };
 
     // Create Descriptor Set
@@ -312,7 +155,7 @@ int main(void) {
     };
 
     VkDescriptorSetLayout camera_descriptor_set_layout = {};
-    error = vkCreateDescriptorSetLayout(window.vk_device, &camera_descriptor_set_create_info, NULL, &camera_descriptor_set_layout);
+    VkResult error = vkCreateDescriptorSetLayout(window.vk_device, &camera_descriptor_set_create_info, NULL, &camera_descriptor_set_layout);
     if (error != VK_SUCCESS) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create camera descriptor set!", NULL);
         exit(0);
@@ -360,80 +203,6 @@ int main(void) {
     VkDescriptorSet vk_descriptor_sets;
     error = vkAllocateDescriptorSets(window.vk_device, &descriptor_set_allocate_info, &vk_descriptor_sets);
 
-    // Create the Pipeline layout
-    VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .setLayoutCount = 1,
-        .pSetLayouts = &camera_descriptor_set_layout,
-        .pushConstantRangeCount = 0,
-        .pPushConstantRanges = NULL,
-    };
-
-    VkPipelineLayout vk_pipieline_layout = {};
-    error = vkCreatePipelineLayout(window.vk_device, &pipeline_layout_create_info, NULL, &vk_pipieline_layout);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create pipeline layput!", NULL);
-        goto cleanup_pipeline;
-    }
-
-    // Create render passes
-    VkRenderPassCreateInfo render_pass_create_info = {
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .attachmentCount = 2,
-        .pAttachments = (VkAttachmentDescription[]) {
-            {
-                .format = window.vk_surface_format.format,
-                .samples = VK_SAMPLE_COUNT_1_BIT,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            },
-            {
-                .format = window.vk_depth_format,
-                .samples = VK_SAMPLE_COUNT_1_BIT,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            }
-        },
-        .subpassCount = 1,
-        .pSubpasses = (VkSubpassDescription[]) {
-            {
-                .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-                .colorAttachmentCount = 1,
-                .pColorAttachments = &(VkAttachmentReference) {
-                    .attachment = 0,
-                    .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                },
-                .pDepthStencilAttachment = &(VkAttachmentReference) {
-                    .attachment = 1,
-                    .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                },
-            },
-        },
-        .dependencyCount = 1,
-        .pDependencies = &(VkSubpassDependency) {
-            .srcSubpass = VK_SUBPASS_EXTERNAL,
-            .dstSubpass = 0,
-            .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-            .srcAccessMask = 0,
-            .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-        }
-    };
-
-    VkRenderPass vk_render_pass = {};
-    error = vkCreateRenderPass(window.vk_device, &render_pass_create_info, NULL, &vk_render_pass);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create render pass!", NULL);
-        goto cleanup_renderpass;
-    }
 
     // Create depth buffer;
     VkImageCreateInfo depth_image_info = {
@@ -512,54 +281,13 @@ int main(void) {
         exit(0);
     }
 
-    // Create Graphics pipeline
-    VkGraphicsPipelineCreateInfo graphics_pipeline_create_info = {
-        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .stageCount = 2,
-        .pStages = (VkPipelineShaderStageCreateInfo[]){
-            vert_shader_stage_info,
-            frag_shader_stage_info,
-        },
-        .pVertexInputState = &vertex_input_state_create_info,
-        .pInputAssemblyState = &input_assembly_state_create_info,
-        .pViewportState = &viewport_state_create_info,
-        .pRasterizationState = &rasterizer_state_create_info,
-        .pMultisampleState = &multisample_state_create_info,
-        .pDepthStencilState = &(VkPipelineDepthStencilStateCreateInfo){
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-            .depthTestEnable = VK_TRUE,
-            .depthWriteEnable = VK_TRUE,
-            .depthCompareOp = VK_COMPARE_OP_LESS,
-            .depthBoundsTestEnable = VK_FALSE,
-            .minDepthBounds = 0.0f,
-            .maxDepthBounds = 1.0f,
-            .stencilTestEnable = VK_FALSE,
-            .front = {},
-            .back = {},
-        },
-        .pColorBlendState = &color_blend_state_create_info,
-        .pDynamicState = &dynamic_state_create_info,
-        .layout = vk_pipieline_layout,
-        .renderPass = vk_render_pass,
-        .subpass = 0,
-        .basePipelineHandle = VK_NULL_HANDLE,
-        .basePipelineIndex = -1,
-    };
-
-    VkPipeline vk_graphics_pipeline = {};
-    error = vkCreateGraphicsPipelines(window.vk_device, VK_NULL_HANDLE, 1, &graphics_pipeline_create_info, NULL, &vk_graphics_pipeline);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to create graphics pipeline!", NULL);
-        goto vk_graphics_pipeline;
-    }
-
     // Create FromeBuffers
     VkFramebuffer *vk_frame_buffers = mmalloc(sizeof(VkFramebuffer) * window.image_count);
 
     for (uint32_t i = 0; i < window.image_count; i ++) {
         VkFramebufferCreateInfo frame_buffer_create_info = {
             .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-            .renderPass = vk_render_pass,
+            .renderPass = renderer.renderpass,
             .attachmentCount = 2,
             .pAttachments = (VkImageView[]) {
                 window.images[i].vk_image_view,
@@ -805,7 +533,7 @@ int main(void) {
 
         VkRenderPassBeginInfo render_pass_info = {
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-            .renderPass = vk_render_pass,
+            .renderPass = renderer.renderpass,
             .framebuffer = vk_frame_buffers[imageIndex],
             .renderArea = {
                 .offset = {0, 0},
@@ -830,19 +558,19 @@ int main(void) {
         // Record Render Pass
         vkCmdBeginRenderPass(vk_command_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdBindPipeline(vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_graphics_pipeline);
+        vkCmdBindPipeline(vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline);
 
         vkCmdSetViewport(vk_command_buffer, 0, 1, &vk_viewport);
         vkCmdSetScissor(vk_command_buffer, 0, 1, &vk_scissor);
 
-        vkCmdBindPipeline(vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_graphics_pipeline);
+        vkCmdBindPipeline(vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline);
 
         VkBuffer vertexBuffers[] = {surface->vertex_buffer};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(vk_command_buffer, 0, 1, vertexBuffers, offsets);
 
         vkCmdBindIndexBuffer(vk_command_buffer, surface->index_buffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdBindDescriptorSets(vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vk_pipieline_layout, 0, 1, &vk_descriptor_sets, 0, NULL);
+        vkCmdBindDescriptorSets(vk_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline_layout, 0, 1, &vk_descriptor_sets, 0, NULL);
 
         vkCmdDrawIndexed(vk_command_buffer, surface->index_data.size, 1, 0, 0, 0);
 
@@ -905,7 +633,8 @@ int main(void) {
     //vkDestroyBuffer(vk_device, vk_vertex_buffer, NULL);
     //vkFreeMemory(vk_device, vertext_buffer_memory, NULL);
 
-    texture_free(&renderer, &window, texture);
+    // Surface will also free texture
+    surface_free(&renderer, &window, surface);
 //vk_fence:
     vkDestroyFence(window.vk_device, current_frame_fence, NULL);
 vk_command_buffer:
@@ -917,18 +646,6 @@ vk_image_buffers:
         //mfree(vk_frame_buffers[i]);
     }
     mfree(vk_frame_buffers);
-    vkDestroyPipeline(window.vk_device, vk_graphics_pipeline, NULL);
-vk_graphics_pipeline:
-    vkDestroyRenderPass(window.vk_device, vk_render_pass, NULL);
-cleanup_renderpass:
-    vkDestroyPipelineLayout(window.vk_device, vk_pipieline_layout, NULL);
-cleanup_pipeline:
-    vkDestroyShaderModule(window.vk_device, frag_shader_module, NULL);
-cleanup_frag:
-    mfree(frag_shader);
-    vkDestroyShaderModule(window.vk_device, vert_shader_module, NULL);
-cleanup_vert:
-    mfree(vert_shader);
 cleanup_imageviews:
     //vkDestroySwapchainKHR(vk_device, vk_swapchain, NULL);
     vk_window_free(&window);

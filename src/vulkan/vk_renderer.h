@@ -22,6 +22,14 @@ typedef struct VkRenderer {
     size_t current_frame;
     FrameData *frame_data;
     VkCommandPool command_pool;
+
+    // One fixed pipeline for now.
+    VkPipeline pipeline;
+
+    VkPipelineLayout pipeline_layout;
+    VkRenderPass renderpass;
+    VkShaderModule vert_shader_module;
+    VkShaderModule frag_shader_module;
 } VkRenderer;
 
 void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_t p_frame_count);

@@ -6,6 +6,7 @@
 #include <stb/stb_image.h>
 
 #include "src/io/memory.h"
+#include "src/io/io.h"
 #include "src/error/error.h"
 
 /// CommandBuffers
@@ -228,6 +229,22 @@ static void memory_upload_data(const VkRenderer *p_vk_renderer, const Window *p_
     vkFreeMemory(p_window->vk_device, staging_buffer_memory, NULL);
 }
 
+// Pipeline
+
+static void pipeline_create_shader_module(VkDevice p_device, const char *p_path, VkShaderModule *r_shader_module) {
+    size_t shader_len = { 0 };
+    char *shader = read_file(p_path, &shader_len);
+    CRASH_NULL_MSG(shader, "FATAL: Failed to load shader from: '%s'", p_path);
+
+    CRASH_COND_MSG(vkCreateShaderModule(p_device,
+        &(VkShaderModuleCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = shader_len,
+            .pCode = (uint32_t *)shader,
+        }, NULL, r_shader_module),
+        "%s", "FATAL: Failed to create shader module");
+}
+
 // Interface
 
 void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_t p_frame_count) {
@@ -273,6 +290,227 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
 
         command_bufffer_create(r_vk_renderer, p_window, &r_vk_renderer->frame_data[i].command_buffer);
     };
+
+    // Create descriptor set layouts
+    VkDescriptorSetLayout descriptor_set_layout;
+    CRASH_COND_MSG(vkCreateDescriptorSetLayout(p_window->vk_device, &(VkDescriptorSetLayoutCreateInfo) {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 2,
+        .pBindings = (VkDescriptorSetLayoutBinding[]) {
+            {
+                .binding = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+                .pImmutableSamplers = NULL,
+            },
+            {
+                .binding = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .pImmutableSamplers = NULL,
+            },
+        },
+    },
+    NULL, &descriptor_set_layout) != VK_SUCCESS,
+    "%s", "FATAL: Failed to create descriptor set layout");
+
+    // Create pipeline layout
+    CRASH_COND_MSG(vkCreatePipelineLayout(p_window->vk_device, &(VkPipelineLayoutCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 1,
+            .pSetLayouts = &descriptor_set_layout,
+            .pushConstantRangeCount = 0,
+            .pPushConstantRanges = NULL,
+        }, NULL, &r_vk_renderer->pipeline_layout) != VK_SUCCESS,
+        "%s", "FATAL: Failed tp create pipeline layout");
+
+    // Create renderpass
+    CRASH_COND_MSG(vkCreateRenderPass(p_window->vk_device,
+        &(VkRenderPassCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .attachmentCount = 2,
+            .pAttachments = (VkAttachmentDescription[]) {
+                {
+                    .format = p_window->vk_surface_format.format,
+                    .samples = VK_SAMPLE_COUNT_1_BIT,
+                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                    .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                },
+                {
+                    .format = p_window->vk_depth_format,
+                    .samples = VK_SAMPLE_COUNT_1_BIT,
+                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                    .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+                    .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                    .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                    .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                }
+            },
+            .subpassCount = 1,
+            .pSubpasses = (VkSubpassDescription[]) {
+                {
+                    .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    .colorAttachmentCount = 1,
+                    .pColorAttachments = &(VkAttachmentReference) {
+                        .attachment = 0,
+                        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    },
+                    .pDepthStencilAttachment = &(VkAttachmentReference) {
+                        .attachment = 1,
+                        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                    },
+                },
+            },
+            .dependencyCount = 1,
+            .pDependencies = &(VkSubpassDependency) {
+                .srcSubpass = VK_SUBPASS_EXTERNAL,
+                .dstSubpass = 0,
+                .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                .srcAccessMask = 0,
+                .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            }
+    }, NULL, &r_vk_renderer->renderpass),
+    "%s", "FATAL: Failed to create render pass");
+
+    // Form into pipeline
+    char shader_path[512];
+    get_resource_path(shader_path, "shaders/vert_shader.spv");
+    pipeline_create_shader_module(p_window->vk_device, shader_path, &r_vk_renderer->vert_shader_module);
+    get_resource_path(shader_path, "shaders/frag_shader.spv");
+    pipeline_create_shader_module(p_window->vk_device, shader_path, &r_vk_renderer->frag_shader_module);
+
+    vkCreateGraphicsPipelines(p_window->vk_device, VK_NULL_HANDLE, 1, &(VkGraphicsPipelineCreateInfo){
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2,
+        .pStages = (VkPipelineShaderStageCreateInfo[]){
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_VERTEX_BIT,
+                .module = r_vk_renderer->vert_shader_module,
+                .pName = "main",
+            },
+            {
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = r_vk_renderer->frag_shader_module,
+                .pName = "main",
+            },
+        },
+        .pVertexInputState = &(VkPipelineVertexInputStateCreateInfo){
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &(VkVertexInputBindingDescription) {
+                .binding = 0,
+                .stride = sizeof(Vertex),
+                .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+            },
+            .vertexAttributeDescriptionCount = 3,
+            .pVertexAttributeDescriptions = (VkVertexInputAttributeDescription[]) {
+                {
+                    .binding = 0,
+                    .location = 0,
+                    .format = VK_FORMAT_R32G32B32_SFLOAT,
+                    .offset = offsetof(Vertex, pos),
+                },
+                {
+                    .binding = 0,
+                    .location = 1,
+                    .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+                    .offset = offsetof(Vertex, color),
+                },
+                {
+                    .binding = 0,
+                    .location = 2,
+                    .format = VK_FORMAT_R32G32_SFLOAT,
+                    .offset = offsetof(Vertex, tex_coord),
+                },
+            },
+        },
+        .pInputAssemblyState = &(VkPipelineInputAssemblyStateCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .primitiveRestartEnable = VK_FALSE,
+        },
+        .pViewportState = &(VkPipelineViewportStateCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .scissorCount = 1,
+        },
+        .pRasterizationState = &(VkPipelineRasterizationStateCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .depthClampEnable = VK_FALSE,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            .cullMode = VK_CULL_MODE_NONE,
+            .frontFace = VK_FRONT_FACE_CLOCKWISE,
+            .depthBiasEnable = VK_FALSE,
+            .depthBiasConstantFactor = 0.0,
+            .depthBiasClamp = 0.0,
+            .depthBiasSlopeFactor = 0.0,
+            .lineWidth = 1.0,
+        },
+        .pMultisampleState = &(VkPipelineMultisampleStateCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .sampleShadingEnable = VK_FALSE,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .minSampleShading = 1.0,
+            .pSampleMask = NULL,
+            .alphaToCoverageEnable = VK_FALSE,
+            .alphaToOneEnable = VK_FALSE,
+        },
+        .pDepthStencilState = &(VkPipelineDepthStencilStateCreateInfo){
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .depthTestEnable = VK_TRUE,
+            .depthWriteEnable = VK_TRUE,
+            .depthCompareOp = VK_COMPARE_OP_LESS,
+            .depthBoundsTestEnable = VK_FALSE,
+            .minDepthBounds = 0.0f,
+            .maxDepthBounds = 1.0f,
+            .stencilTestEnable = VK_FALSE,
+            .front = {},
+            .back = {},
+        },
+        .pColorBlendState = &(VkPipelineColorBlendStateCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .logicOpEnable = VK_FALSE,
+            .logicOp = VK_LOGIC_OP_COPY,
+            .attachmentCount = 1,
+            .pAttachments = &(VkPipelineColorBlendAttachmentState) {
+                .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+                .blendEnable = VK_TRUE,
+                .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+                .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                .colorBlendOp = VK_BLEND_OP_ADD,
+                .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+                .alphaBlendOp = VK_BLEND_OP_ADD,
+            },
+            .blendConstants[0] = 0.0,
+            .blendConstants[1] = 0.0,
+            .blendConstants[2] = 0.0,
+            .blendConstants[3] = 0.0,
+        },
+        .pDynamicState = &(VkPipelineDynamicStateCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .dynamicStateCount = 2,
+            .pDynamicStates = (VkDynamicState[]) {
+                VK_DYNAMIC_STATE_VIEWPORT,
+                VK_DYNAMIC_STATE_SCISSOR,
+            },
+        },
+        .layout = r_vk_renderer->pipeline_layout,
+        .renderPass = r_vk_renderer->renderpass,
+        .subpass = 0,
+        .basePipelineHandle = VK_NULL_HANDLE,
+        .basePipelineIndex = -1,
+    }, NULL, &r_vk_renderer->pipeline);
 }
 
 void vk_renderer_free(VkRenderer *r_vk_renderer, const Window *p_window) {
