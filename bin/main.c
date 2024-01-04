@@ -29,55 +29,6 @@ static int32_t frames = 0;
 static uint32_t window_width = 800;
 static uint32_t window_height = 600;
 
-void create_vkbuffer(VkDevice p_device, VkPhysicalDevice p_physical_device, VkDeviceSize p_size, VkBufferUsageFlags p_usage, VkMemoryPropertyFlags p_properties, VkBuffer *p_buffer, VkDeviceMemory *p_buffer_memory) {
-    VkBufferCreateInfo buffer_crreate_info = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = p_size,
-        .usage = p_usage,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-    };
-
-    VkResult error = vkCreateBuffer(p_device, &buffer_crreate_info, NULL, p_buffer);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to allocate vertex buffer!", NULL);
-        return;
-    }
-
-    VkMemoryRequirements vk_memory_requrements;
-    vkGetBufferMemoryRequirements(p_device, *p_buffer, &vk_memory_requrements);
-
-    VkPhysicalDeviceMemoryProperties vk_memory_properties;
-    vkGetPhysicalDeviceMemoryProperties(p_physical_device, &vk_memory_properties);
-
-    uint32_t memory_type_idx = 0;
-    bool found = false;
-    for (uint32_t i = 0; i < vk_memory_properties.memoryTypeCount; i++) {
-        if ((vk_memory_requrements.memoryTypeBits & (1 << i)) && (vk_memory_properties.memoryTypes[i].propertyFlags & p_properties) == p_properties) {
-            found = true;
-            memory_type_idx = i;
-            break;
-        }
-    }
-    if (!found) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to find valid memory type!", NULL);
-        return;
-    }
-
-    VkMemoryAllocateInfo memory_allocate_info = {
-        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-        .allocationSize = vk_memory_requrements.size,
-        .memoryTypeIndex = memory_type_idx,
-    };
-
-    // Check max supported allocations, and use offset instead
-    error = vkAllocateMemory(p_device, &memory_allocate_info, NULL, p_buffer_memory);
-    if (error != VK_SUCCESS) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to allocate vertex buffer!", NULL);
-        return;
-    }
-    vkBindBufferMemory(p_device, *p_buffer, *p_buffer_memory, 0);
-}
-
 int main(void) {
     // Load model data
     char model_path[512];
@@ -183,8 +134,8 @@ int main(void) {
         fps++;
 
         // Render
-        vkWaitForFences(window.vk_device, 1, &renderer.frame_data[0].render_fence, VK_TRUE, UINT64_MAX);
-        vkResetFences(window.vk_device, 1, &renderer.frame_data[0].render_fence);
+        vkWaitForFences(window.vk_device, 1, &renderer.frame_data[renderer.current_frame].render_fence, VK_TRUE, UINT64_MAX);
+        vkResetFences(window.vk_device, 1, &renderer.frame_data[renderer.current_frame].render_fence);
 
         // Create CameraBuffer
         CameraBuffer camera_bufffer = {
@@ -219,13 +170,13 @@ int main(void) {
         mat4_perspective(camera_bufffer.proj, degtorad(45), (float)window.vk_extent2D.width / (float)window.vk_extent2D.height, (float)0.1, (float)10.0);
         camera_bufffer.proj[1][1] *= -1;
 
-        SurfaceDescriptorSet s = *(SurfaceDescriptorSet *)vector_get(&surface->descriptor_sets, 0);
+        SurfaceDescriptorSet s = *(SurfaceDescriptorSet *)vector_get(&surface->descriptor_sets, renderer.current_frame);
         memcpy(s.camera_data, &camera_bufffer, sizeof(CameraBuffer));
 
         uint32_t imageIndex;
-        vkAcquireNextImageKHR(window.vk_device, window.vk_swapchain, UINT64_MAX, renderer.frame_data[0].image_available, VK_NULL_HANDLE, &imageIndex);
+        vkAcquireNextImageKHR(window.vk_device, window.vk_swapchain, UINT64_MAX, renderer.frame_data[renderer.current_frame].image_available, VK_NULL_HANDLE, &imageIndex);
 
-        vkResetCommandBuffer(renderer.frame_data[0].command_buffer, 0);
+        vkResetCommandBuffer(renderer.frame_data[renderer.current_frame].command_buffer, 0);
 
         // Record commands
         VkCommandBufferBeginInfo command_buffer_begin_info = {
@@ -234,7 +185,7 @@ int main(void) {
             .pInheritanceInfo = NULL,
         };
 
-        VkResult error = vkBeginCommandBuffer(renderer.frame_data[0].command_buffer, &command_buffer_begin_info);
+        VkResult error = vkBeginCommandBuffer(renderer.frame_data[renderer.current_frame].command_buffer, &command_buffer_begin_info);
         if (error != VK_SUCCESS) {
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to start command buffer recording!", NULL);
             running = false;
@@ -265,26 +216,26 @@ int main(void) {
         };
 
         // Record Render Pass
-        vkCmdBeginRenderPass(renderer.frame_data[0].command_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBeginRenderPass(renderer.frame_data[renderer.current_frame].command_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdBindPipeline(renderer.frame_data[0].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline);
+        vkCmdBindPipeline(renderer.frame_data[renderer.current_frame].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline);
 
-        vkCmdSetViewport(renderer.frame_data[0].command_buffer, 0, 1, &vk_viewport);
-        vkCmdSetScissor(renderer.frame_data[0].command_buffer, 0, 1, &vk_scissor);
+        vkCmdSetViewport(renderer.frame_data[renderer.current_frame].command_buffer, 0, 1, &vk_viewport);
+        vkCmdSetScissor(renderer.frame_data[renderer.current_frame].command_buffer, 0, 1, &vk_scissor);
 
-        vkCmdBindPipeline(renderer.frame_data[0].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline);
+        vkCmdBindPipeline(renderer.frame_data[renderer.current_frame].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline);
 
         VkBuffer vertexBuffers[] = {surface->vertex_buffer};
         VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(renderer.frame_data[0].command_buffer, 0, 1, vertexBuffers, offsets);
+        vkCmdBindVertexBuffers(renderer.frame_data[renderer.current_frame].command_buffer, 0, 1, vertexBuffers, offsets);
 
-        vkCmdBindIndexBuffer(renderer.frame_data[0].command_buffer, surface->index_buffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdBindDescriptorSets(renderer.frame_data[0].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline_layout, 0, 1, &s.descriptor_set, 0, NULL);
+        vkCmdBindIndexBuffer(renderer.frame_data[renderer.current_frame].command_buffer, surface->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdBindDescriptorSets(renderer.frame_data[renderer.current_frame].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline_layout, 0, 1, &s.descriptor_set, 0, NULL);
 
-        vkCmdDrawIndexed(renderer.frame_data[0].command_buffer, surface->index_data.size, 1, 0, 0, 0);
+        vkCmdDrawIndexed(renderer.frame_data[renderer.current_frame].command_buffer, surface->index_data.size, 1, 0, 0, 0);
 
-        vkCmdEndRenderPass(renderer.frame_data[0].command_buffer);
-        error = vkEndCommandBuffer(renderer.frame_data[0].command_buffer);
+        vkCmdEndRenderPass(renderer.frame_data[renderer.current_frame].command_buffer);
+        error = vkEndCommandBuffer(renderer.frame_data[renderer.current_frame].command_buffer);
         if (error != VK_SUCCESS) {
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to end command buffer recording!", NULL);
             running = false;
@@ -294,20 +245,20 @@ int main(void) {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .waitSemaphoreCount = 1,
             .pWaitSemaphores = (VkSemaphore[]) {
-                renderer.frame_data[0].image_available,
+                renderer.frame_data[renderer.current_frame].image_available,
             },
             .pWaitDstStageMask = (VkPipelineStageFlags[]) {
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
             },
             .commandBufferCount = 1,
-            .pCommandBuffers = &renderer.frame_data[0].command_buffer,
+            .pCommandBuffers = &renderer.frame_data[renderer.current_frame].command_buffer,
             .signalSemaphoreCount = 1,
             .pSignalSemaphores = (VkSemaphore[]) {
-                renderer.frame_data[0].render_finished,
+                renderer.frame_data[renderer.current_frame].render_finished,
             },
         };
 
-        error = vkQueueSubmit(window.vk_queue, 1, &submit_info, renderer.frame_data[0].render_fence);
+        error = vkQueueSubmit(window.vk_queue, 1, &submit_info, renderer.frame_data[renderer.current_frame].render_fence);
         if (error != VK_SUCCESS) {
             running = false;
         }
@@ -316,7 +267,7 @@ int main(void) {
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .waitSemaphoreCount = 1,
             .pWaitSemaphores = (VkSemaphore[]) {
-                renderer.frame_data[0].render_finished,
+                renderer.frame_data[renderer.current_frame].render_finished,
             },
             .swapchainCount = 1,
             .pSwapchains = (VkSwapchainKHR[]) {
@@ -327,6 +278,8 @@ int main(void) {
         };
 
         vkQueuePresentKHR(window.vk_queue, &present_info);
+
+        renderer.current_frame = (renderer.current_frame + 1) % renderer.frames;
 
         if (SDL_GetTicks() - timer > 1000) {
             timer += 1000;
