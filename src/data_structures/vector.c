@@ -23,6 +23,16 @@ void vector_push_back(Vector *r_vector, const void *p_data) {
     vector_set(r_vector, r_vector->size++, p_data);
 }
 
+void *vector_get(const Vector *p_vector, const size_t p_idx) {
+    return p_vector->data + (p_idx * p_vector->data_size);
+}
+
+void vector_copy(const Vector *p_src, Vector *r_dst) {
+    for (size_t i = 0; i < p_src->size; i++) {
+        vector_push_back(r_dst, p_src->data + (i * p_src->data_size));
+    }
+}
+
 void vector_free(Vector *r_vector) {
     r_vector->capacity = 0;
     r_vector->size = 0;

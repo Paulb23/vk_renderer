@@ -13,9 +13,9 @@
 #define TINYOBJ_LOADER_C_IMPLEMENTATION
 #include "thirdparty/tinyobj_loader_c/tinyobj_loader_c.h"
 #include "src/data_structures/hash_map.h"
+#include "src/vulkan/vk_renderer.h"
 
 #include "src/io/memory.h"
-#include "src/surface.h"
 #include "src/error/error.h"
 
 
