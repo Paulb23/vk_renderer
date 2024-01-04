@@ -13,6 +13,7 @@
 #include "src/vulkan/vk_renderer.h"
 
 #include "src/camera.h"
+#include "src/object.h"
 #include "src/io/memory.h"
 #include "src/data_structures/hash_map.h"
 #include "src/data_structures/vector.h"
@@ -61,6 +62,21 @@ int main(void) {
 
 
     Surface *surface = surface_create(&renderer, &window, vertexes, indices, texture);
+    Surface *surface2 = surface_create(&renderer, &window, vertexes, indices, texture);
+
+    Vector objects = (Vector) {0, 0, sizeof(Object), NULL};
+    vector_push_back(&objects, &(Object) {
+        .position = (Vect3){0, 0, 0},
+        .rotation = (Vect3){-90, 0, 0},
+        .surface = *surface,
+    });
+
+   vector_push_back(&objects, &(Object) {
+        .position = (Vect3){0, 3, 0},
+        .rotation = (Vect3){-90, 0, 0},
+        .surface = *surface2,
+    });
+
     // Create Fixed functions Pipelines
 
     VkViewport vk_viewport = {
@@ -137,42 +153,6 @@ int main(void) {
         vkWaitForFences(window.vk_device, 1, &renderer.frame_data[renderer.current_frame].render_fence, VK_TRUE, UINT64_MAX);
         vkResetFences(window.vk_device, 1, &renderer.frame_data[renderer.current_frame].render_fence);
 
-        // Create CameraBuffer
-        CameraBuffer camera_bufffer = {
-            .model = {
-                {1, 0, 0, 0},
-                {0, 1, 0, 0},
-                {0, 0, 1, 0},
-                {0, 0, 0, 1},
-            },
-            .view = {
-                {1, 0, 0, 0},
-                {0, 1, 0, 0},
-                {0, 0, 1, 0},
-                {0, 0, 0, 1},
-            },
-            .proj = {
-                {0, 0, 0, 0},
-                {0, 0, 0, 0},
-                {0, 0, 0, 0},
-                {0, 0, 0, 0},
-            },
-        };
-
-        rot++;
-        if (rot > 360) {
-            rot = 0;
-        }
-        mat4_rotate(camera_bufffer.model,  degtorad(90), (Vect3){-1, 0, 0});
-
-        camera_get_bias(&camera, camera_bufffer.view);
-
-        mat4_perspective(camera_bufffer.proj, degtorad(45), (float)window.vk_extent2D.width / (float)window.vk_extent2D.height, (float)0.1, (float)10.0);
-        camera_bufffer.proj[1][1] *= -1;
-
-        SurfaceDescriptorSet s = *(SurfaceDescriptorSet *)vector_get(&surface->descriptor_sets, renderer.current_frame);
-        memcpy(s.camera_data, &camera_bufffer, sizeof(CameraBuffer));
-
         uint32_t imageIndex;
         vkAcquireNextImageKHR(window.vk_device, window.vk_swapchain, UINT64_MAX, renderer.frame_data[renderer.current_frame].image_available, VK_NULL_HANDLE, &imageIndex);
 
@@ -225,14 +205,57 @@ int main(void) {
 
         vkCmdBindPipeline(renderer.frame_data[renderer.current_frame].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline);
 
-        VkBuffer vertexBuffers[] = {surface->vertex_buffer};
-        VkDeviceSize offsets[] = {0};
-        vkCmdBindVertexBuffers(renderer.frame_data[renderer.current_frame].command_buffer, 0, 1, vertexBuffers, offsets);
+        for (int i = 0; i < objects.size; i++) {
+            Object object = *(Object *)vector_get(&objects, i);
 
-        vkCmdBindIndexBuffer(renderer.frame_data[renderer.current_frame].command_buffer, surface->index_buffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdBindDescriptorSets(renderer.frame_data[renderer.current_frame].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline_layout, 0, 1, &s.descriptor_set, 0, NULL);
+            // Create CameraBuffer
+            CameraBuffer camera_bufffer = {
+                .model = {
+                    {1, 0, 0, 0},
+                    {0, 1, 0, 0},
+                    {0, 0, 1, 0},
+                    {0, 0, 0, 1},
+                },
+                .view = {
+                    {1, 0, 0, 0},
+                    {0, 1, 0, 0},
+                    {0, 0, 1, 0},
+                    {0, 0, 0, 1},
+                },
+                .proj = {
+                    {0, 0, 0, 0},
+                    {0, 0, 0, 0},
+                    {0, 0, 0, 0},
+                    {0, 0, 0, 0},
+                },
+            };
 
-        vkCmdDrawIndexed(renderer.frame_data[renderer.current_frame].command_buffer, surface->index_data.size, 1, 0, 0, 0);
+            rot++;
+            if (rot > 360) {
+                rot = 0;
+            }
+            mat4_rotate(camera_bufffer.model,  degtorad(object.rotation.x), (Vect3){1, 0, 0});
+            mat4_rotate(camera_bufffer.model,  degtorad(object.rotation.y), (Vect3){0, 1, 0});
+            mat4_rotate(camera_bufffer.model,  degtorad(object.rotation.z), (Vect3){0, 0, 1});
+            mat4_translate(camera_bufffer.model, object.position);
+
+            camera_get_bias(&camera, camera_bufffer.view);
+
+            mat4_perspective(camera_bufffer.proj, degtorad(45), (float)window.vk_extent2D.width / (float)window.vk_extent2D.height, (float)0.1, (float)10.0);
+            camera_bufffer.proj[1][1] *= -1;
+
+            SurfaceDescriptorSet s = *(SurfaceDescriptorSet *)vector_get(&object.surface.descriptor_sets, renderer.current_frame);
+            memcpy(s.camera_data, &camera_bufffer, sizeof(CameraBuffer));
+
+            VkBuffer vertexBuffers[] = {surface->vertex_buffer};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(renderer.frame_data[renderer.current_frame].command_buffer, 0, 1, vertexBuffers, offsets);
+
+            vkCmdBindIndexBuffer(renderer.frame_data[renderer.current_frame].command_buffer, surface->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdBindDescriptorSets(renderer.frame_data[renderer.current_frame].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline_layout, 0, 1, &s.descriptor_set, 0, NULL);
+
+            vkCmdDrawIndexed(renderer.frame_data[renderer.current_frame].command_buffer, surface->index_data.size, 1, 0, 0, 0);
+        }
 
         vkCmdEndRenderPass(renderer.frame_data[renderer.current_frame].command_buffer);
         error = vkEndCommandBuffer(renderer.frame_data[renderer.current_frame].command_buffer);

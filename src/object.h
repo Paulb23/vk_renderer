@@ -7,7 +7,7 @@
 typedef struct Object {
     Vect3 position;
     Vect3 rotation;
-    Vector surfaces;
+    Surface surface;
 } Object;
 
 #endif
