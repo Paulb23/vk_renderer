@@ -292,7 +292,6 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
     };
 
     // Create descriptor set layouts
-    VkDescriptorSetLayout descriptor_set_layout;
     CRASH_COND_MSG(vkCreateDescriptorSetLayout(p_window->vk_device, &(VkDescriptorSetLayoutCreateInfo) {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .bindingCount = 2,
@@ -313,14 +312,33 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
             },
         },
     },
-    NULL, &descriptor_set_layout) != VK_SUCCESS,
+    NULL, &r_vk_renderer->descriptor_set) != VK_SUCCESS,
     "%s", "FATAL: Failed to create descriptor set layout");
+
+    // Create pool for DescriptorSetLayout
+    CRASH_COND_MSG(vkCreateDescriptorPool(p_window->vk_device,
+        &(VkDescriptorPoolCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .poolSizeCount = 2,
+            .pPoolSizes = (VkDescriptorPoolSize[]) {
+                {
+                    .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .descriptorCount = 1000,
+                },
+                {
+                    .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .descriptorCount = 1000,
+                },
+            },
+            .maxSets = 10000,
+        }, NULL, &r_vk_renderer->descriptor_pool) != VK_SUCCESS,
+        "%s", "Failed to create descriptor set pool");
 
     // Create pipeline layout
     CRASH_COND_MSG(vkCreatePipelineLayout(p_window->vk_device, &(VkPipelineLayoutCreateInfo) {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .setLayoutCount = 1,
-            .pSetLayouts = &descriptor_set_layout,
+            .pSetLayouts = &r_vk_renderer->descriptor_set,
             .pushConstantRangeCount = 0,
             .pPushConstantRanges = NULL,
         }, NULL, &r_vk_renderer->pipeline_layout) != VK_SUCCESS,
@@ -379,6 +397,53 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
             }
     }, NULL, &r_vk_renderer->renderpass),
     "%s", "FATAL: Failed to create render pass");
+
+    // Create FrameBuffers
+    vkCreateImage(p_window->vk_device, &(VkImageCreateInfo) {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .extent.width = p_window->vk_extent2D.width,
+        .extent.height = p_window->vk_extent2D.height,
+        .extent.depth = 1,
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .format = p_window->vk_depth_format,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    }, NULL, &r_vk_renderer->depth_texture.image);
+
+    memory_create_image_buffer(p_window->vk_device, p_window->vk_physical_device, r_vk_renderer->depth_texture.image, &r_vk_renderer->depth_texture.device_memory);
+
+    vkCreateImageView(p_window->vk_device, &(VkImageViewCreateInfo) {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = r_vk_renderer->depth_texture.image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = p_window->vk_depth_format,
+        .subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+        .subresourceRange.baseMipLevel = 0,
+        .subresourceRange.levelCount = 1,
+        .subresourceRange.baseArrayLayer = 0,
+        .subresourceRange.layerCount = 1,
+    }, NULL, &r_vk_renderer->depth_texture.image_view);
+
+    r_vk_renderer->vk_frame_buffers = mmalloc(sizeof(VkFramebuffer) * p_window->image_count);
+    for (uint32_t i = 0; i < p_window->image_count; i ++) {
+        vkCreateFramebuffer(p_window->vk_device, &(VkFramebufferCreateInfo){
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .renderPass = r_vk_renderer->renderpass,
+            .attachmentCount = 2,
+            .pAttachments = (VkImageView[]) {
+                p_window->images[i].vk_image_view,
+                r_vk_renderer->depth_texture.image_view,
+            },
+            .width = p_window->vk_extent2D.width,
+            .height = p_window->vk_extent2D.height,
+            .layers = 1,
+        }, NULL, &r_vk_renderer->vk_frame_buffers[i]);
+    }
 
     // Form into pipeline
     char shader_path[512];
@@ -511,6 +576,26 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
         .basePipelineHandle = VK_NULL_HANDLE,
         .basePipelineIndex = -1,
     }, NULL, &r_vk_renderer->pipeline);
+
+    // Create other configuration types
+    vkCreateSampler(p_window->vk_device, &(VkSamplerCreateInfo) {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .anisotropyEnable = VK_TRUE,
+        .maxAnisotropy = p_window->max_sampler_anisotropy,
+        .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+        .unnormalizedCoordinates = VK_FALSE,
+        .compareEnable = VK_FALSE,
+        .compareOp = VK_COMPARE_OP_ALWAYS,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .mipLodBias = 0.0f,
+        .minLod = 0.0f,
+        .maxLod = 0.0f,
+    }, NULL, &r_vk_renderer->image_sampler);
 }
 
 void vk_renderer_free(VkRenderer *r_vk_renderer, const Window *p_window) {
@@ -596,6 +681,53 @@ void texture_free(const VkRenderer *p_vk_renderer, const Window *p_window, Textu
 
 /// Surface
 
+void surface_descriptor_set_create(const VkRenderer *p_vk_renderer, const Window *p_window, VkImageView *texture, SurfaceDescriptorSet *r_surface_descriptor_set) {
+    vkAllocateDescriptorSets(p_window->vk_device, &(VkDescriptorSetAllocateInfo) {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = p_vk_renderer->descriptor_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &p_vk_renderer->descriptor_set,
+    }, &r_surface_descriptor_set->descriptor_set);
+
+    memory_create_vkbuffer(p_window->vk_device, p_window->vk_physical_device, sizeof(CameraBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &r_surface_descriptor_set->buffer, &r_surface_descriptor_set->memory);
+
+    vkMapMemory(p_window->vk_device, r_surface_descriptor_set->memory, 0, sizeof(CameraBuffer), 0, &r_surface_descriptor_set->camera_data);
+
+    // Inital update
+    vkUpdateDescriptorSets(p_window->vk_device, 2, (VkWriteDescriptorSet[]){
+        {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = r_surface_descriptor_set->descriptor_set,
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+            .pBufferInfo = &(VkDescriptorBufferInfo) {
+                .buffer = r_surface_descriptor_set->buffer,
+                .offset = 0,
+                .range = sizeof(CameraBuffer),
+            },
+            .pImageInfo = NULL,
+            .pTexelBufferView = NULL,
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = r_surface_descriptor_set->descriptor_set,
+            .dstBinding = 1,
+            .dstArrayElement = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .pImageInfo = &(VkDescriptorImageInfo) {
+                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .imageView = *texture,
+                .sampler = p_vk_renderer->image_sampler,
+            },
+            .pBufferInfo = NULL,
+            .pTexelBufferView = NULL,
+        }
+    }, 0, NULL);
+}
+
 Surface *surface_create(const VkRenderer *p_vk_renderer, const Window *p_window, Vector p_vertex, Vector p_index_data, Texture *p_texture) {
     // TODO: Cache to re-use same memory
     Surface *surface = mmalloc(sizeof(Surface));
@@ -609,6 +741,13 @@ Surface *surface_create(const VkRenderer *p_vk_renderer, const Window *p_window,
     memory_upload_data(p_vk_renderer, p_window, surface->index_data.data, surface->index_data.data_size * surface->index_data.size, &surface->index_buffer, &surface->index_memory, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
 
     surface->texture = p_texture;
+
+    // Allocate DescriptorSets
+    surface->descriptor_sets = (Vector){0, 0, sizeof(SurfaceDescriptorSet), NULL};
+    vector_resize(&surface->descriptor_sets, p_vk_renderer->frames);
+    for (size_t i = 0; i < p_vk_renderer->frames; i++) {
+        surface_descriptor_set_create(p_vk_renderer, p_window, &surface->texture->image_view, vector_get(&surface->descriptor_sets, i));
+    }
     return surface;
 }
 

@@ -5,6 +5,14 @@
 #include "src/io/memory.h"
 #include "src/error/error.h"
 
+void vector_resize(Vector *r_vector, const size_t p_size) {
+    r_vector->data = mrealloc(r_vector->data, r_vector->data_size * p_size);
+    r_vector->capacity = p_size;
+    if (p_size < r_vector->size) {
+        r_vector->size = p_size;
+    }
+}
+
 void vector_set(Vector *r_vector, const size_t p_idx, const void *p_data) {
     ERR_FAIL_UINDEX(p_idx, r_vector->size);
     memcpy(r_vector->data + (p_idx * r_vector->data_size), p_data, r_vector->data_size);

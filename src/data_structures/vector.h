@@ -10,6 +10,8 @@ typedef struct Vector {
     void *data;
 } Vector;
 
+void vector_resize(Vector *r_vector, const size_t p_size);
+
 void vector_set(Vector *r_vector, const size_t p_idx, const void *p_data);
 
 void vector_push_back(Vector *r_vector, const void *p_data);
