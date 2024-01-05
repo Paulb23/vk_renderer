@@ -77,22 +77,6 @@ int main(void) {
         .surface = *surface2,
     });
 
-    // Create Fixed functions Pipelines
-
-    VkViewport vk_viewport = {
-        .x = 0.0f,
-        .y = 0.0f,
-        .width = (float)window.vk_extent2D.width,
-        .height = (float)window.vk_extent2D.height,
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f,
-    };
-
-    VkRect2D vk_scissor = {
-        .extent = window.vk_extent2D,
-        .offset = {0, 0},
-    };
-
     // Main loop
     SDL_Event event;
 
@@ -109,7 +93,6 @@ int main(void) {
 
     bool mouse_capture = false;
 
-    float rot = 0;
     bool running = true;
     while (running) {
         Uint32 now = SDL_GetTicks();
@@ -149,160 +132,7 @@ int main(void) {
         }
         fps++;
 
-        // Render
-        vkWaitForFences(window.vk_device, 1, &renderer.frame_data[renderer.current_frame].render_fence, VK_TRUE, UINT64_MAX);
-        vkResetFences(window.vk_device, 1, &renderer.frame_data[renderer.current_frame].render_fence);
-
-        uint32_t imageIndex;
-        vkAcquireNextImageKHR(window.vk_device, window.vk_swapchain, UINT64_MAX, renderer.frame_data[renderer.current_frame].image_available, VK_NULL_HANDLE, &imageIndex);
-
-        vkResetCommandBuffer(renderer.frame_data[renderer.current_frame].command_buffer, 0);
-
-        // Record commands
-        VkCommandBufferBeginInfo command_buffer_begin_info = {
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .flags = 0,
-            .pInheritanceInfo = NULL,
-        };
-
-        VkResult error = vkBeginCommandBuffer(renderer.frame_data[renderer.current_frame].command_buffer, &command_buffer_begin_info);
-        if (error != VK_SUCCESS) {
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to start command buffer recording!", NULL);
-            running = false;
-        }
-
-        VkRenderPassBeginInfo render_pass_info = {
-            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-            .renderPass = renderer.renderpass,
-            .framebuffer = renderer.vk_frame_buffers[imageIndex],
-            .renderArea = {
-                .offset = {0, 0},
-                .extent = window.vk_extent2D,
-            },
-            .clearValueCount = 2,
-            .pClearValues = (VkClearValue[]) {
-                {
-                    .color = {
-                        .float32 = {0.0f, 0.0f, 0.0f, 0.0f},
-                    },
-                },
-                {
-                    .depthStencil = {
-                        .depth = 1.0f,
-                        .stencil = 0,
-                    },
-                },
-            },
-        };
-
-        // Record Render Pass
-        vkCmdBeginRenderPass(renderer.frame_data[renderer.current_frame].command_buffer, &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
-
-        vkCmdBindPipeline(renderer.frame_data[renderer.current_frame].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline);
-
-        vkCmdSetViewport(renderer.frame_data[renderer.current_frame].command_buffer, 0, 1, &vk_viewport);
-        vkCmdSetScissor(renderer.frame_data[renderer.current_frame].command_buffer, 0, 1, &vk_scissor);
-
-        vkCmdBindPipeline(renderer.frame_data[renderer.current_frame].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline);
-
-        for (size_t i = 0; i < objects.size; i++) {
-            Object object = *(Object *)vector_get(&objects, i);
-
-            // Create CameraBuffer
-            CameraBuffer camera_bufffer = {
-                .model = {
-                    {1, 0, 0, 0},
-                    {0, 1, 0, 0},
-                    {0, 0, 1, 0},
-                    {0, 0, 0, 1},
-                },
-                .view = {
-                    {1, 0, 0, 0},
-                    {0, 1, 0, 0},
-                    {0, 0, 1, 0},
-                    {0, 0, 0, 1},
-                },
-                .proj = {
-                    {0, 0, 0, 0},
-                    {0, 0, 0, 0},
-                    {0, 0, 0, 0},
-                    {0, 0, 0, 0},
-                },
-            };
-
-            rot++;
-            if (rot > 360) {
-                rot = 0;
-            }
-            mat4_rotate(camera_bufffer.model,  degtorad(object.rotation.x), (Vect3){1, 0, 0});
-            mat4_rotate(camera_bufffer.model,  degtorad(object.rotation.y), (Vect3){0, 1, 0});
-            mat4_rotate(camera_bufffer.model,  degtorad(object.rotation.z), (Vect3){0, 0, 1});
-            mat4_translate(camera_bufffer.model, object.position);
-
-            camera_get_bias(&camera, camera_bufffer.view);
-
-            mat4_perspective(camera_bufffer.proj, degtorad(45), (float)window.vk_extent2D.width / (float)window.vk_extent2D.height, (float)0.1, (float)10.0);
-            camera_bufffer.proj[1][1] *= -1;
-
-            SurfaceDescriptorSet s = *(SurfaceDescriptorSet *)vector_get(&object.surface.descriptor_sets, renderer.current_frame);
-            memcpy(s.camera_data, &camera_bufffer, sizeof(CameraBuffer));
-
-            VkBuffer vertexBuffers[] = {surface->vertex_buffer};
-            VkDeviceSize offsets[] = {0};
-            vkCmdBindVertexBuffers(renderer.frame_data[renderer.current_frame].command_buffer, 0, 1, vertexBuffers, offsets);
-
-            vkCmdBindIndexBuffer(renderer.frame_data[renderer.current_frame].command_buffer, surface->index_buffer, 0, VK_INDEX_TYPE_UINT32);
-            vkCmdBindDescriptorSets(renderer.frame_data[renderer.current_frame].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline_layout, 0, 1, &s.descriptor_set, 0, NULL);
-
-            vkCmdDrawIndexed(renderer.frame_data[renderer.current_frame].command_buffer, surface->index_data.size, 1, 0, 0, 0);
-        }
-
-        vkCmdEndRenderPass(renderer.frame_data[renderer.current_frame].command_buffer);
-        error = vkEndCommandBuffer(renderer.frame_data[renderer.current_frame].command_buffer);
-        if (error != VK_SUCCESS) {
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Vulkan", "FATAL: Failed to end command buffer recording!", NULL);
-            running = false;
-        }
-
-        VkSubmitInfo submit_info = {
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = (VkSemaphore[]) {
-                renderer.frame_data[renderer.current_frame].image_available,
-            },
-            .pWaitDstStageMask = (VkPipelineStageFlags[]) {
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-            },
-            .commandBufferCount = 1,
-            .pCommandBuffers = &renderer.frame_data[renderer.current_frame].command_buffer,
-            .signalSemaphoreCount = 1,
-            .pSignalSemaphores = (VkSemaphore[]) {
-                renderer.frame_data[renderer.current_frame].render_finished,
-            },
-        };
-
-        error = vkQueueSubmit(window.vk_queue, 1, &submit_info, renderer.frame_data[renderer.current_frame].render_fence);
-        if (error != VK_SUCCESS) {
-            running = false;
-        }
-
-        VkPresentInfoKHR present_info = {
-            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = (VkSemaphore[]) {
-                renderer.frame_data[renderer.current_frame].render_finished,
-            },
-            .swapchainCount = 1,
-            .pSwapchains = (VkSwapchainKHR[]) {
-                window.vk_swapchain,
-            },
-            .pImageIndices = &imageIndex,
-            .pResults = NULL,
-        };
-
-        vkQueuePresentKHR(window.vk_queue, &present_info);
-
-        renderer.current_frame = (renderer.current_frame + 1) % renderer.frames;
+        vk_draw_frame(&renderer, &window, &camera, &objects);
 
         if (SDL_GetTicks() - timer > 1000) {
             timer += 1000;

@@ -11,3 +11,5 @@ typedef struct Object {
 } Object;
 
 #endif
+
+void object_get_bias(const Object *p_object, Mat4 r_bias);

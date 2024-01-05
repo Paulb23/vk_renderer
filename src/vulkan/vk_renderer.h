@@ -1,6 +1,7 @@
 #ifndef VK_RENDERER_H_
 #define VK_RENDERER_H_
 
+#include "src/camera.h"
 #include "src/data_structures/vector.h"
 #include "src/math/vectors.h"
 #include "src/math/matrices.h"
@@ -53,9 +54,13 @@ typedef struct VkRenderer {
 
     // Only one type for now.
     VkSampler image_sampler;
+    VkViewport vk_viewport;
+    VkRect2D vk_scissor;
 } VkRenderer;
 
 void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_t p_frame_count);
+
+void vk_draw_frame(VkRenderer *p_vk_renderer, const Window *p_window, Camera *camera, const Vector *objects);
 
 void vk_renderer_free(VkRenderer *r_vk_renderer, const Window *p_window);
 

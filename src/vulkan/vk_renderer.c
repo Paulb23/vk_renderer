@@ -5,6 +5,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
 
+#include "src/math/angles.h"
+#include "src/object.h"
+#include "src/camera.h"
 #include "src/io/memory.h"
 #include "src/io/io.h"
 #include "src/error/error.h"
@@ -604,6 +607,127 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
         .maxLod = 0.0f,
     }, NULL, &r_vk_renderer->image_sampler) != VK_SUCCESS,
     "%s", "FATAL: failed to create image sampler!");
+
+    r_vk_renderer->vk_viewport = (VkViewport){
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = p_window->vk_extent2D.width,
+        .height = p_window->vk_extent2D.height,
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f,
+    };
+
+    r_vk_renderer->vk_scissor = (VkRect2D){
+        .extent = p_window->vk_extent2D,
+        .offset = {0, 0},
+    };
+}
+
+void vk_draw_frame(VkRenderer *p_vk_renderer, const Window *p_window, Camera *camera, const Vector *objects) {
+    size_t frame = p_vk_renderer->current_frame;
+
+    // Wait for previous frame
+    CRASH_COND_MSG(vkWaitForFences(p_window->vk_device, 1, &p_vk_renderer->frame_data[frame].render_fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS, "%s", "FATAL: Failed to wait for frame!");
+    CRASH_COND_MSG(vkResetFences(p_window->vk_device, 1, &p_vk_renderer->frame_data[frame].render_fence) != VK_SUCCESS, "%s", "FATAL: Failed to reset frame fence!");
+
+    // Get next image
+    uint32_t image_idx;
+    CRASH_COND_MSG(vkAcquireNextImageKHR(p_window->vk_device, p_window->vk_swapchain, UINT64_MAX, p_vk_renderer->frame_data[frame].image_available, VK_NULL_HANDLE, &image_idx) != VK_SUCCESS,
+        "%s", "FATAL: Failed to get frame image index!");
+
+    const VkCommandBuffer cmd_buffer = p_vk_renderer->frame_data[frame].command_buffer;
+    command_buffer_start(&cmd_buffer, 0);
+
+    vkCmdBeginRenderPass(cmd_buffer, &(VkRenderPassBeginInfo) {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = p_vk_renderer->renderpass,
+        .framebuffer = p_vk_renderer->vk_frame_buffers[image_idx],
+        .renderArea = {
+            .offset = {0, 0},
+            .extent = p_window->vk_extent2D,
+        },
+        .clearValueCount = 2,
+        .pClearValues = (VkClearValue[]) {
+            {
+                .color = {
+                    .float32 = {0.0f, 0.0f, 0.0f, 0.0f},
+                },
+            },
+            {
+                .depthStencil = {
+                    .depth = 1.0f,
+                    .stencil = 0,
+                },
+            },
+        },
+    }, VK_SUBPASS_CONTENTS_INLINE);
+
+    vkCmdBindPipeline(cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, p_vk_renderer->pipeline);
+    vkCmdSetViewport(cmd_buffer, 0, 1, &p_vk_renderer->vk_viewport);
+    vkCmdSetScissor(cmd_buffer, 0, 1, &p_vk_renderer->vk_scissor);
+
+    // Create CameraBuffer
+    CameraBuffer camera_bufffer = { .proj = { {0},{0},{0},{0} }};
+
+    // Compute camera view
+    camera_get_bias(camera, camera_bufffer.view);
+    mat4_perspective(camera_bufffer.proj, degtorad(45), p_window->vk_extent2D.width / p_window->vk_extent2D.height, 0.1, 10.0);
+    camera_bufffer.proj[1][1] *= -1;
+
+    // TODO: Should take surfaces?
+    for (size_t i = 0; i < objects->size; i++) {
+        Object object = *(Object *)vector_get(objects, i);
+
+        object_get_bias(&object, camera_bufffer.model);
+        SurfaceDescriptorSet surface_descriptor = *(SurfaceDescriptorSet *)vector_get(&object.surface.descriptor_sets, frame);
+        memcpy(surface_descriptor.camera_data, &camera_bufffer, sizeof(CameraBuffer));
+
+        vkCmdBindVertexBuffers(cmd_buffer, 0, 1, (VkBuffer[]){object.surface.vertex_buffer}, (VkDeviceSize[]){ 0 });
+
+        vkCmdBindIndexBuffer(cmd_buffer, object.surface.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdBindDescriptorSets(cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, p_vk_renderer->pipeline_layout, 0, 1, &surface_descriptor.descriptor_set, 0, NULL);
+
+        vkCmdDrawIndexed(cmd_buffer, object.surface.index_data.size, 1, 0, 0, 0);
+    }
+
+    vkCmdEndRenderPass(cmd_buffer);
+    CRASH_COND_MSG(vkEndCommandBuffer(cmd_buffer) != VK_SUCCESS, "%s", "FATAL: Failed to end command draw buffer!");
+    CRASH_COND_MSG(vkQueueSubmit(p_window->vk_queue, 1,
+        &(VkSubmitInfo) {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = (VkSemaphore[]) {
+                p_vk_renderer->frame_data[frame].image_available,
+            },
+            .pWaitDstStageMask = (VkPipelineStageFlags[]) {
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+            },
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd_buffer,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = (VkSemaphore[]) {
+                p_vk_renderer->frame_data[frame].render_finished,
+            },
+        }, p_vk_renderer->frame_data[frame].render_fence) != VK_SUCCESS,
+        "%s", "FATAL: Failed to submit queue!");
+
+    CRASH_COND_MSG(vkQueuePresentKHR(p_window->vk_queue,
+        &(VkPresentInfoKHR) {
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = (VkSemaphore[]) {
+                p_vk_renderer->frame_data[p_vk_renderer->current_frame].render_finished,
+            },
+            .swapchainCount = 1,
+            .pSwapchains = (VkSwapchainKHR[]) {
+                p_window->vk_swapchain,
+            },
+            .pImageIndices = &image_idx,
+            .pResults = NULL,
+        }) != VK_SUCCESS,
+        "%s", "FATAL: Failed to present image!");
+
+    p_vk_renderer->current_frame = (p_vk_renderer->current_frame + 1) % p_vk_renderer->frames;
 }
 
 void vk_renderer_free(VkRenderer *r_vk_renderer, const Window *p_window) {
