@@ -15,21 +15,28 @@ void camera_init(Camera *r_camera) {
     r_camera->rotation = (Vect3){0.7f, 0.04f, 0.66f};
     r_camera->sensitivity = 0.1f;
     r_camera->move_speed = 0.1f;
+    r_camera->sprint_speed = 0.15f;
 }
 
 void camera_physics_process(Camera *r_camera, double p_delta) {
     const Uint8 *keystates =  SDL_GetKeyboardState(NULL);
+
+    float speed = r_camera->move_speed;
+    if (keystates[SDL_SCANCODE_LSHIFT]) {
+        speed = r_camera->sprint_speed;
+    }
+
     if (keystates[SDL_SCANCODE_W]) {
-        r_camera->position = vect3_add(r_camera->position, vect3_multi(r_camera->rotation, r_camera->move_speed * p_delta));
+        r_camera->position = vect3_add(r_camera->position, vect3_multi(r_camera->rotation, speed * p_delta));
     }
     if (keystates[SDL_SCANCODE_S]) {
-        r_camera->position = vect3_sub(r_camera->position, vect3_multi(r_camera->rotation, r_camera->move_speed * p_delta));
+        r_camera->position = vect3_sub(r_camera->position, vect3_multi(r_camera->rotation, speed * p_delta));
     }
     if (keystates[SDL_SCANCODE_A]) {
-        r_camera->position = vect3_sub(r_camera->position, vect3_multi(vect3_normalize(vect3_cross(r_camera->rotation, (Vect3){0, 1, 0})), r_camera->move_speed * p_delta));
+        r_camera->position = vect3_sub(r_camera->position, vect3_multi(vect3_normalize(vect3_cross(r_camera->rotation, (Vect3){0, 1, 0})), speed * p_delta));
     }
     if (keystates[SDL_SCANCODE_D]) {
-        r_camera->position = vect3_add(r_camera->position, vect3_multi(vect3_normalize(vect3_cross(r_camera->rotation, (Vect3){0, 1, 0})), r_camera->move_speed * p_delta));
+        r_camera->position = vect3_add(r_camera->position, vect3_multi(vect3_normalize(vect3_cross(r_camera->rotation, (Vect3){0, 1, 0})), speed * p_delta));
     }
 }
 

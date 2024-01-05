@@ -671,7 +671,7 @@ void vk_draw_frame(VkRenderer *p_vk_renderer, const Window *p_window, Camera *ca
 
     // Compute camera view
     camera_get_bias(camera, camera_bufffer.view);
-    mat4_perspective(camera_bufffer.proj, degtorad(45), p_window->vk_extent2D.width / p_window->vk_extent2D.height, 0.1, 10.0);
+    mat4_perspective(camera_bufffer.proj, degtorad(45), p_window->vk_extent2D.width / p_window->vk_extent2D.height, 0.1, 100.0);
     camera_bufffer.proj[1][1] *= -1;
 
     // TODO: Should take surfaces?

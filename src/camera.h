@@ -13,6 +13,7 @@ typedef struct Camera {
     float yaw;
     float sensitivity;
     float move_speed;
+    float sprint_speed;
 } Camera;
 
 void camera_init(Camera *r_camera);
