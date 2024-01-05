@@ -24,6 +24,10 @@ typedef struct Texture {
 
 /// FrameData
 
+typedef struct FragPushConstants {
+    uint32_t lighting_enabled;
+} FragPushConstants;
+
 typedef struct FrameData {
     VkSemaphore image_available;
     VkSemaphore render_finished;
@@ -56,6 +60,9 @@ typedef struct VkRenderer {
     VkSampler image_sampler;
     VkViewport vk_viewport;
     VkRect2D vk_scissor;
+
+    // Push constants
+    FragPushConstants frag_push_constants;
 } VkRenderer;
 
 void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_t p_frame_count);

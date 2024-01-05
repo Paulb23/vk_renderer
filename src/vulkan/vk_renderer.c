@@ -253,6 +253,9 @@ static void pipeline_create_shader_module(VkDevice p_device, const char *p_path,
 void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_t p_frame_count) {
     CRASH_COND_MSG(p_frame_count > p_window->image_count, "%s", "FATAL: Not enough images in swapchain!");
 
+    // Default settings
+    r_vk_renderer->frag_push_constants.lighting_enabled = true;
+
     // Create command pool
     CRASH_COND_MSG(vkCreateCommandPool(p_window->vk_device,
         &(VkCommandPoolCreateInfo){
@@ -342,8 +345,14 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .setLayoutCount = 1,
             .pSetLayouts = &r_vk_renderer->descriptor_set,
-            .pushConstantRangeCount = 0,
-            .pPushConstantRanges = NULL,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = (VkPushConstantRange[]) {
+                {
+                    .offset = 0,
+                    .size = sizeof(FragPushConstants),
+                    .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+                }
+            },
         }, NULL, &r_vk_renderer->pipeline_layout) != VK_SUCCESS,
         "%s", "FATAL: Failed tp create pipeline layout");
 
@@ -656,7 +665,7 @@ void vk_draw_frame(VkRenderer *p_vk_renderer, const Window *p_window, Camera *ca
         .pClearValues = (VkClearValue[]) {
             {
                 .color = {
-                    .float32 = {0.0f, 0.0f, 0.0f, 0.0f},
+                    .float32 = {2.0f, 84.0f, 132.0f, 0.0f},
                 },
             },
             {
@@ -671,6 +680,8 @@ void vk_draw_frame(VkRenderer *p_vk_renderer, const Window *p_window, Camera *ca
     vkCmdBindPipeline(cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, p_vk_renderer->pipeline);
     vkCmdSetViewport(cmd_buffer, 0, 1, &p_vk_renderer->vk_viewport);
     vkCmdSetScissor(cmd_buffer, 0, 1, &p_vk_renderer->vk_scissor);
+
+    vkCmdPushConstants(cmd_buffer, p_vk_renderer->pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(FragPushConstants), &p_vk_renderer->frag_push_constants);
 
     // Create CameraBuffer
     CameraBuffer camera_bufffer = { .proj = { {0},{0},{0},{0} }};

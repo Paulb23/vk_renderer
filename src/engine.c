@@ -69,6 +69,10 @@ void engine_run(Engine *p_engine) {
                     SDL_SetRelativeMouseMode(SDL_TRUE);
                 }
 
+                if (event.key.keysym.sym == SDLK_l) {
+                    p_engine->renderer.frag_push_constants.lighting_enabled = !p_engine->renderer.frag_push_constants.lighting_enabled;
+                }
+
                 if (event.key.keysym.sym == SDLK_ESCAPE) {
                     mouse_capture = false;
                     SDL_SetRelativeMouseMode(SDL_FALSE);

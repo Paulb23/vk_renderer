@@ -10,11 +10,19 @@ layout(location = 0) out vec4 outColor;
 
 layout(binding = 1) uniform sampler2D texSampler;
 
+layout(push_constant) uniform PushBlock {
+	bool lighting_enabled;
+} pushBlock;
+
 void main() {
+	if (pushBlock.lighting_enabled == false) {
+		outColor = texture(texSampler, fragTexCoord);
+		return;
+	}
 	vec3 lightPos = vec3(0, 50, 0);
 	vec3 lightColor = vec3(1, 1, 1);
 
-	float ambientStrength = 0.3;
+	float ambientStrength = 0.5;
 	float specularStrength = 0.5;
     vec3 ambient = ambientStrength * lightColor;
 
