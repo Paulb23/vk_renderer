@@ -63,7 +63,7 @@ void vk_renderer_free(VkRenderer *r_vk_renderer, const Window *p_window);
 
 Texture *texture_create(const VkRenderer *p_vk_renderer, const Window *p_window, char *p_path);
 
-void texture_free(const VkRenderer *p_vk_renderer, const Window *p_window, Texture *p_texture);
+void texture_free(const Window *p_window, Texture *p_texture);
 
 /// Surface
 
@@ -99,6 +99,6 @@ typedef struct Surface {
 
 Surface *surface_create(const VkRenderer *p_vk_renderer, const Window *p_window, Vector p_vertex, Vector p_index_data, Texture *p_texture);
 
-void surface_free(const VkRenderer *p_vk_renderer, const Window *p_window, Surface *r_surface);
+void surface_free(const Window *p_window, Surface *r_surface);
 
 #endif

@@ -24,7 +24,7 @@ static void command_bufffer_create(const VkRenderer *p_vk_renderer, const Window
 }
 
 static void command_buffer_start(const VkCommandBuffer *p_command_buffer, VkCommandBufferUsageFlags p_flags) {
-    vkResetCommandBuffer(*p_command_buffer, 0);
+    CRASH_COND_MSG(vkResetCommandBuffer(*p_command_buffer, 0) != VK_SUCCESS, "%s", "FATAL: Failed to reset command buffer");
     CRASH_COND_MSG(vkBeginCommandBuffer(*p_command_buffer, &(VkCommandBufferBeginInfo){
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .flags = p_flags,
@@ -34,7 +34,7 @@ static void command_buffer_start(const VkCommandBuffer *p_command_buffer, VkComm
 }
 
 static void command_buffer_submit(const Window *p_window, const VkCommandBuffer *p_command_buffer, const VkFence p_fence) {
-    vkEndCommandBuffer(*p_command_buffer);
+    CRASH_COND_MSG(vkEndCommandBuffer(*p_command_buffer) != VK_SUCCESS, "%s", "FATAL: Failed to end command buffer!");
     CRASH_COND_MSG(vkQueueSubmit(p_window->vk_queue, 1,
         &(VkSubmitInfo){
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -82,7 +82,7 @@ void memory_create_vkbuffer(VkDevice p_device, VkPhysicalDevice p_physical_devic
         }, NULL, p_buffer_memory) != VK_SUCCESS,
         "%s", "FATAL: Failed to allocate memory for buffer!");
 
-    vkBindBufferMemory(p_device, *p_buffer, *p_buffer_memory, 0);
+    CRASH_COND_MSG(vkBindBufferMemory(p_device, *p_buffer, *p_buffer_memory, 0) != VK_SUCCESS, "%s", "FATAL: Failed to bind vKBuffer!");
 }
 
 static void memory_create_image_buffer(VkDevice p_device, VkPhysicalDevice p_physical_device, VkImage p_image, VkDeviceMemory *r_buffer) {
@@ -140,7 +140,7 @@ static void memory_transition_image(const VkRenderer *p_vk_renderer, const Windo
     });
 
     command_buffer_submit(p_window, &cmd_buffer, VK_NULL_HANDLE);
-    vkQueueWaitIdle(p_window->vk_queue);
+    CRASH_COND_MSG(vkQueueWaitIdle(p_window->vk_queue) != VK_SUCCESS, "%s", "FATAL: Failed to wait for queue!");
     command_bufffer_free(p_vk_renderer, p_window, &cmd_buffer);
 }
 
@@ -184,7 +184,7 @@ static void memory_upload_image(const VkRenderer *p_vk_renderer, const Window *p
         },
     });
     command_buffer_submit(p_window, &cmd_buffer, VK_NULL_HANDLE);
-    vkQueueWaitIdle(p_window->vk_queue);
+    CRASH_COND_MSG(vkQueueWaitIdle(p_window->vk_queue) != VK_SUCCESS, "%s", "FATAL: Failed to wait for queue!");
     command_bufffer_free(p_vk_renderer, p_window, &cmd_buffer);
 
     // Update format
@@ -221,7 +221,7 @@ static void memory_upload_data(const VkRenderer *p_vk_renderer, const Window *p_
     });
 
     command_buffer_submit(p_window, &cmd_buffer, VK_NULL_HANDLE);
-    vkQueueWaitIdle(p_window->vk_queue);
+    CRASH_COND_MSG(vkQueueWaitIdle(p_window->vk_queue) != VK_SUCCESS, "%s", "FATAL: Failed to wait for queue!");
     command_bufffer_free(p_vk_renderer, p_window, &cmd_buffer);
 
     // Free memory
@@ -399,50 +399,56 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
     "%s", "FATAL: Failed to create render pass");
 
     // Create FrameBuffers
-    vkCreateImage(p_window->vk_device, &(VkImageCreateInfo) {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-        .imageType = VK_IMAGE_TYPE_2D,
-        .extent.width = p_window->vk_extent2D.width,
-        .extent.height = p_window->vk_extent2D.height,
-        .extent.depth = 1,
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .format = p_window->vk_depth_format,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-    }, NULL, &r_vk_renderer->depth_texture.image);
+    CRASH_COND_MSG(vkCreateImage(p_window->vk_device,
+        &(VkImageCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .extent.width = p_window->vk_extent2D.width,
+            .extent.height = p_window->vk_extent2D.height,
+            .extent.depth = 1,
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .format = p_window->vk_depth_format,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        }, NULL, &r_vk_renderer->depth_texture.image) != VK_SUCCESS,
+        "%s", "FATAL: failed to create depth image");
 
     memory_create_image_buffer(p_window->vk_device, p_window->vk_physical_device, r_vk_renderer->depth_texture.image, &r_vk_renderer->depth_texture.device_memory);
 
-    vkCreateImageView(p_window->vk_device, &(VkImageViewCreateInfo) {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .image = r_vk_renderer->depth_texture.image,
-        .viewType = VK_IMAGE_VIEW_TYPE_2D,
-        .format = p_window->vk_depth_format,
-        .subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-        .subresourceRange.baseMipLevel = 0,
-        .subresourceRange.levelCount = 1,
-        .subresourceRange.baseArrayLayer = 0,
-        .subresourceRange.layerCount = 1,
-    }, NULL, &r_vk_renderer->depth_texture.image_view);
+    CRASH_COND_MSG(vkCreateImageView(p_window->vk_device,
+        &(VkImageViewCreateInfo) {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = r_vk_renderer->depth_texture.image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = p_window->vk_depth_format,
+            .subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .subresourceRange.baseMipLevel = 0,
+            .subresourceRange.levelCount = 1,
+            .subresourceRange.baseArrayLayer = 0,
+            .subresourceRange.layerCount = 1,
+        }, NULL, &r_vk_renderer->depth_texture.image_view) != VK_SUCCESS,
+        "%s", "FATAL: failed to create depth image view");
 
     r_vk_renderer->vk_frame_buffers = mmalloc(sizeof(VkFramebuffer) * p_window->image_count);
     for (uint32_t i = 0; i < p_window->image_count; i ++) {
-        vkCreateFramebuffer(p_window->vk_device, &(VkFramebufferCreateInfo){
-            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-            .renderPass = r_vk_renderer->renderpass,
-            .attachmentCount = 2,
-            .pAttachments = (VkImageView[]) {
-                p_window->images[i].vk_image_view,
-                r_vk_renderer->depth_texture.image_view,
-            },
-            .width = p_window->vk_extent2D.width,
-            .height = p_window->vk_extent2D.height,
-            .layers = 1,
-        }, NULL, &r_vk_renderer->vk_frame_buffers[i]);
+        CRASH_COND_MSG(vkCreateFramebuffer(p_window->vk_device,
+            &(VkFramebufferCreateInfo){
+                .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .renderPass = r_vk_renderer->renderpass,
+                .attachmentCount = 2,
+                .pAttachments = (VkImageView[]) {
+                    p_window->images[i].vk_image_view,
+                    r_vk_renderer->depth_texture.image_view,
+                },
+                .width = p_window->vk_extent2D.width,
+                .height = p_window->vk_extent2D.height,
+                .layers = 1,
+            }, NULL, &r_vk_renderer->vk_frame_buffers[i]),
+            "%s", "FATAL: Failed to create frame buffer!");
     }
 
     // Form into pipeline
@@ -452,7 +458,7 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
     get_resource_path(shader_path, "shaders/frag_shader.spv");
     pipeline_create_shader_module(p_window->vk_device, shader_path, &r_vk_renderer->frag_shader_module);
 
-    vkCreateGraphicsPipelines(p_window->vk_device, VK_NULL_HANDLE, 1, &(VkGraphicsPipelineCreateInfo){
+    CRASH_COND_MSG(vkCreateGraphicsPipelines(p_window->vk_device, VK_NULL_HANDLE, 1, &(VkGraphicsPipelineCreateInfo){
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .stageCount = 2,
         .pStages = (VkPipelineShaderStageCreateInfo[]){
@@ -575,10 +581,11 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
         .subpass = 0,
         .basePipelineHandle = VK_NULL_HANDLE,
         .basePipelineIndex = -1,
-    }, NULL, &r_vk_renderer->pipeline);
+    }, NULL, &r_vk_renderer->pipeline) != VK_SUCCESS,
+    "%s", "FATAL: Failed to create pipeline!");
 
     // Create other configuration types
-    vkCreateSampler(p_window->vk_device, &(VkSamplerCreateInfo) {
+    CRASH_COND_MSG(vkCreateSampler(p_window->vk_device, &(VkSamplerCreateInfo) {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
         .magFilter = VK_FILTER_LINEAR,
         .minFilter = VK_FILTER_LINEAR,
@@ -595,7 +602,8 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
         .mipLodBias = 0.0f,
         .minLod = 0.0f,
         .maxLod = 0.0f,
-    }, NULL, &r_vk_renderer->image_sampler);
+    }, NULL, &r_vk_renderer->image_sampler) != VK_SUCCESS,
+    "%s", "FATAL: failed to create image sampler!");
 }
 
 void vk_renderer_free(VkRenderer *r_vk_renderer, const Window *p_window) {
@@ -672,7 +680,7 @@ Texture *texture_create(const VkRenderer *p_vk_renderer, const Window *p_window,
     return texture;
 }
 
-void texture_free(const VkRenderer *p_vk_renderer, const Window *p_window, Texture *p_texture) {
+void texture_free(const Window *p_window, Texture *p_texture) {
     vkDestroyImageView(p_window->vk_device, p_texture->image_view, NULL);
     vkDestroyImage(p_window->vk_device, p_texture->image, NULL);
     vkFreeMemory(p_window->vk_device, p_texture->device_memory, NULL);
@@ -682,16 +690,17 @@ void texture_free(const VkRenderer *p_vk_renderer, const Window *p_window, Textu
 /// Surface
 
 void surface_descriptor_set_create(const VkRenderer *p_vk_renderer, const Window *p_window, VkImageView *texture, SurfaceDescriptorSet *r_surface_descriptor_set) {
-    vkAllocateDescriptorSets(p_window->vk_device, &(VkDescriptorSetAllocateInfo) {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .descriptorPool = p_vk_renderer->descriptor_pool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = &p_vk_renderer->descriptor_set,
-    }, &r_surface_descriptor_set->descriptor_set);
+    CRASH_COND_MSG(vkAllocateDescriptorSets(p_window->vk_device, &(VkDescriptorSetAllocateInfo) {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = p_vk_renderer->descriptor_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &p_vk_renderer->descriptor_set,
+        }, &r_surface_descriptor_set->descriptor_set) != VK_SUCCESS,
+        "%s", "FATAL: Failed to allocate surface DescriptorSet!");
 
     memory_create_vkbuffer(p_window->vk_device, p_window->vk_physical_device, sizeof(CameraBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &r_surface_descriptor_set->buffer, &r_surface_descriptor_set->memory);
 
-    vkMapMemory(p_window->vk_device, r_surface_descriptor_set->memory, 0, sizeof(CameraBuffer), 0, &r_surface_descriptor_set->camera_data);
+    CRASH_COND_MSG(vkMapMemory(p_window->vk_device, r_surface_descriptor_set->memory, 0, sizeof(CameraBuffer), 0, &r_surface_descriptor_set->camera_data) != VK_SUCCESS, "%s", "FATAL: Failed to map surface DescriptorSet buffer!");
 
     // Inital update
     vkUpdateDescriptorSets(p_window->vk_device, 2, (VkWriteDescriptorSet[]){
@@ -751,14 +760,14 @@ Surface *surface_create(const VkRenderer *p_vk_renderer, const Window *p_window,
     return surface;
 }
 
-void surface_free(const VkRenderer *p_vk_renderer, const Window *p_window, Surface *r_surface) {
+void surface_free(const Window *p_window, Surface *r_surface) {
     vkDestroyBuffer(p_window->vk_device, r_surface->vertex_buffer, NULL);
     vkFreeMemory(p_window->vk_device, r_surface->vertex_memory, NULL);
     vkDestroyBuffer(p_window->vk_device,r_surface->index_buffer, NULL);
     vkFreeMemory(p_window->vk_device, r_surface->index_memory, NULL);
 
     // TODO: Remove when texture cache exists
-    texture_free(p_vk_renderer, p_window, r_surface->texture);
+    texture_free(p_window, r_surface->texture);
     mfree(r_surface);
 }
 

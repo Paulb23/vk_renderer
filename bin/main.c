@@ -205,7 +205,7 @@ int main(void) {
 
         vkCmdBindPipeline(renderer.frame_data[renderer.current_frame].command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, renderer.pipeline);
 
-        for (int i = 0; i < objects.size; i++) {
+        for (size_t i = 0; i < objects.size; i++) {
             Object object = *(Object *)vector_get(&objects, i);
 
             // Create CameraBuffer
