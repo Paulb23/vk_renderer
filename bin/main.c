@@ -9,7 +9,7 @@
 #include "src/math/vectors.h"
 
 int main(void) {
-    Engine *engine = engine_create(800, 600);
+    Engine *engine = engine_create(1280, 800);
 
     // Load model data
     char model_path[512];

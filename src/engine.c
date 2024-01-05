@@ -20,7 +20,7 @@ Engine *engine_create(size_t p_width, size_t p_height) {
     engine->frames = 0;
 
     vk_window_create(&engine->window, "Toy Vk Renderer", p_width, p_height);
-    vk_renderer_create(&engine->renderer, &engine->window, 1);
+    vk_renderer_create(&engine->renderer, &engine->window, 2);
     camera_init(&engine->camera);
     engine->objects = (Vector) {0, 0, sizeof(Object), NULL};
 

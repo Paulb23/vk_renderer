@@ -74,6 +74,7 @@ void texture_free(const Window *p_window, Texture *p_texture);
 
 typedef struct vertex {
     Vect3 pos;
+    Vect3 normal;
     Vect4 color;
     Vect2 tex_coord;
 } Vertex;

@@ -122,6 +122,11 @@ void load_obj(const char *p_path, Vector *r_vertexes, Vector *r_indexes) {
                 attrib.vertices[3 * attrib.faces[i].v_idx + 1],
                 attrib.vertices[3 * attrib.faces[i].v_idx + 2],
             },
+            .normal = {
+                attrib.normals[3 * attrib.faces[i].vn_idx + 0],
+                attrib.normals[3 * attrib.faces[i].vn_idx + 1],
+                attrib.normals[3 * attrib.faces[i].vn_idx + 2],
+            },
             .color = {
                 {1.0f},
                 {1.0f},

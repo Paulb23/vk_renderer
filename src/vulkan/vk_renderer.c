@@ -486,7 +486,7 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
                 .stride = sizeof(Vertex),
                 .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
             },
-            .vertexAttributeDescriptionCount = 3,
+            .vertexAttributeDescriptionCount = 4,
             .pVertexAttributeDescriptions = (VkVertexInputAttributeDescription[]) {
                 {
                     .binding = 0,
@@ -498,11 +498,17 @@ void vk_renderer_create(VkRenderer *r_vk_renderer, const Window *p_window, size_
                     .binding = 0,
                     .location = 1,
                     .format = VK_FORMAT_R32G32B32A32_SFLOAT,
-                    .offset = offsetof(Vertex, color),
+                    .offset = offsetof(Vertex, normal),
                 },
                 {
                     .binding = 0,
                     .location = 2,
+                    .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+                    .offset = offsetof(Vertex, color),
+                },
+                {
+                    .binding = 0,
+                    .location = 3,
                     .format = VK_FORMAT_R32G32_SFLOAT,
                     .offset = offsetof(Vertex, tex_coord),
                 },
@@ -671,7 +677,7 @@ void vk_draw_frame(VkRenderer *p_vk_renderer, const Window *p_window, Camera *ca
 
     // Compute camera view
     camera_get_bias(camera, camera_bufffer.view);
-    mat4_perspective(camera_bufffer.proj, degtorad(45), p_window->vk_extent2D.width / p_window->vk_extent2D.height, 0.1, 100.0);
+    mat4_perspective(camera_bufffer.proj, degtorad(60), p_window->vk_extent2D.width / p_window->vk_extent2D.height, 0.1, 100.0);
     camera_bufffer.proj[1][1] *= -1;
 
     // TODO: Should take surfaces?
